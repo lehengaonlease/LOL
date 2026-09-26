@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/admin",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/((?!api|uploads|images|assets).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

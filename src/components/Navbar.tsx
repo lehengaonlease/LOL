@@ -63,37 +63,37 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header
-      className={`fixed top-0 left-0 right-0 z-40 transition-all duration-300 ${
+      className={`fixed top-0 left-0 right-0 z-40 h-14 sm:h-16 flex items-center transition-all duration-300 ${
         useSolidHeader
-          ? 'bg-[#1C1310]/95 backdrop-blur-md shadow-lg py-3.5'
-          : 'bg-gradient-to-b from-black/70 via-black/30 to-transparent py-5'
+          ? 'bg-[#1C1310]/95 backdrop-blur-md shadow-md'
+          : 'bg-gradient-to-b from-black/70 via-black/30 to-transparent'
       }`}
     >
-      <div className="max-w-[1400px] mx-auto px-4 sm:px-8 flex items-center justify-between gap-4">
-        {/* Left Brand Mark (Dynamic Top Logo or Brand Lockup managed from /admin) */}
+      <div className="w-full max-w-[1400px] mx-auto px-4 sm:px-8 flex items-center justify-between gap-4">
+        {/* Left Brand Mark (Obeys exact Top Logo Size from /admin without stretching the header bar) */}
         <button
           onClick={() => {
             setActiveView('catalog');
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
-          className="flex items-center gap-2.5 text-left focus:outline-none cursor-pointer shrink-0 group"
+          className="relative flex items-center gap-2.5 text-left focus:outline-none cursor-pointer shrink-0 group py-1"
         >
           {siteSettings.topLogoUrl ? (
             <img
               src={siteSettings.topLogoUrl}
               alt={siteSettings.brandTitle || 'LOL Couture'}
-              style={{ height: `${siteSettings.topLogoHeight || 56}px` }}
-              className="w-auto object-contain transition-all duration-200"
+              style={{ height: `${siteSettings.topLogoHeight || 64}px` }}
+              className="w-auto max-w-none object-contain transition-all duration-200 drop-shadow-[0_2px_10px_rgba(0,0,0,0.35)]"
             />
           ) : (
             <div
               className="flex items-center gap-2.5 origin-left transition-transform duration-200"
               style={{
-                transform: `scale(${(siteSettings.topLogoHeight || 56) / 48})`,
+                transform: `scale(${(siteSettings.topLogoHeight || 64) / 52})`,
               }}
             >
               <span
-                className="text-2xl sm:text-3xl font-bold tracking-tight text-[#F5A623] group-hover:text-[#FF7A00] transition-colors"
+                className="text-2xl sm:text-3xl font-bold tracking-tight text-[#F5A623] group-hover:text-[#FF7A00] transition-colors leading-none"
                 style={{ fontFamily: "'Oswald', sans-serif" }}
               >
                 {siteSettings.brandHindiMark || 'लोल'}
@@ -101,12 +101,12 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span className="h-6 w-[1.5px] bg-[#F5A623]/70" />
               <div className="flex flex-col">
                 <span
-                  className="text-xl sm:text-2xl font-bold tracking-[0.14em] text-[#F5A623] leading-none"
+                  className="text-lg sm:text-xl font-bold tracking-[0.12em] text-[#F5A623] leading-none"
                   style={{ fontFamily: "'Oswald', sans-serif" }}
                 >
                   {siteSettings.brandTitle || 'LOL COUTURE'}
                 </span>
-                <span className="text-[9px] tracking-[0.22em] uppercase text-white/80 mt-0.5">
+                <span className="text-[8.5px] tracking-[0.2em] uppercase text-white/80 mt-0.5 leading-none">
                   {siteSettings.brandSubtitle || 'By Sanjeevani • Indore'}
                 </span>
               </div>
@@ -115,7 +115,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </button>
 
         {/* Center Category Links */}
-        <nav className="hidden xl:flex items-center gap-7">
+        <nav className="hidden xl:flex items-center gap-5">
           {CENTER_NAV_LINKS.map((item) => {
             const isActive =
               activeView === 'catalog' &&
@@ -125,7 +125,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               <button
                 key={item.label}
                 onClick={() => handleNavClick(item.vibe)}
-                className={`text-[11px] tracking-[0.16em] uppercase font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                className={`text-[10px] tracking-[0.14em] uppercase font-medium transition-colors cursor-pointer whitespace-nowrap ${
                   isActive
                     ? 'text-[#F5A623] font-semibold'
                     : 'text-white/90 hover:text-[#F5A623]'
@@ -138,11 +138,11 @@ export const Navbar: React.FC<NavbarProps> = ({
         </nav>
 
         {/* Right Customer Actions */}
-        <div className="flex items-center gap-4 sm:gap-5 text-white">
+        <div className="flex items-center gap-3 sm:gap-4 text-white">
           {/* Expandable Search Input */}
           {searchOpen ? (
-            <div className="flex items-center bg-white/15 backdrop-blur-md border border-white/30 rounded-full px-3.5 py-1.5">
-              <Search className="w-3.5 h-3.5 text-white/70 mr-2 shrink-0" />
+            <div className="flex items-center bg-white/15 backdrop-blur-md border border-white/30 rounded-full px-3 py-1">
+              <Search className="w-3 h-3 text-white/70 mr-1.5 shrink-0" />
               <input
                 type="text"
                 autoFocus
@@ -152,7 +152,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   if (activeView !== 'catalog') setActiveView('catalog');
                 }}
                 placeholder="Search lehengas..."
-                className="bg-transparent text-xs text-white placeholder:text-white/60 focus:outline-none w-32 sm:w-44"
+                className="bg-transparent text-[11px] text-white placeholder:text-white/60 focus:outline-none w-28 sm:w-36"
               />
               <button
                 onClick={() => {
@@ -161,7 +161,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 }}
                 className="text-white/70 hover:text-white ml-1 cursor-pointer"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-3 h-3" />
               </button>
             </div>
           ) : (
@@ -170,7 +170,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               title="Search Collection"
               className="text-white/90 hover:text-[#F5A623] transition-colors cursor-pointer"
             >
-              <Search className="w-5 h-5 stroke-[1.75]" />
+              <Search className="w-4 h-4 stroke-[1.75]" />
             </button>
           )}
 
@@ -184,8 +184,8 @@ export const Navbar: React.FC<NavbarProps> = ({
               title="Saved Lehengas"
               className="relative text-white/90 hover:text-[#F5A623] transition-colors cursor-pointer"
             >
-              <Heart className="w-5 h-5 fill-[#E85D24] text-[#E85D24]" />
-              <span className="absolute -top-1.5 -right-2 w-4 h-4 rounded-full bg-white text-[#1C1310] text-[9px] font-bold flex items-center justify-center">
+              <Heart className="w-4 h-4 fill-[#E85D24] text-[#E85D24]" />
+              <span className="absolute -top-1.5 -right-2 w-3.5 h-3.5 rounded-full bg-white text-[#1C1310] text-[8px] font-bold flex items-center justify-center">
                 {wishlistCount}
               </span>
             </button>
@@ -197,9 +197,9 @@ export const Navbar: React.FC<NavbarProps> = ({
             title="Your Bookings & Return Schedule"
             className="relative text-white/90 hover:text-[#F5A623] transition-colors cursor-pointer"
           >
-            <ShoppingBag className="w-5 h-5 stroke-[1.75]" />
+            <ShoppingBag className="w-4 h-4 stroke-[1.75]" />
             {pendingTasksCount > 0 && (
-              <span className="absolute -top-1.5 -right-2 w-4 h-4 rounded-full bg-[#E11D2A] text-white text-[9px] font-bold flex items-center justify-center">
+              <span className="absolute -top-1.5 -right-2 w-3.5 h-3.5 rounded-full bg-[#E11D2A] text-white text-[8px] font-bold flex items-center justify-center">
                 {pendingTasksCount}
               </span>
             )}
@@ -210,19 +210,19 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={() => {
               document.getElementById('catalog-grid')?.scrollIntoView({ behavior: 'smooth' });
             }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-white/45 text-xs font-medium tracking-wider text-white hover:border-[#F5A623] hover:text-[#F5A623] transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-white/40 text-[10px] font-medium tracking-wider text-white hover:border-[#F5A623] hover:text-[#F5A623] transition-colors cursor-pointer"
           >
             <span>INR</span>
-            <ChevronDown className="w-3.5 h-3.5 opacity-80" />
+            <ChevronDown className="w-3 h-3 opacity-80" />
           </button>
 
           {/* Show Admin badge only when inside Backend CMS */}
           {activeView === 'admin' && (
             <button
               onClick={() => setActiveView('catalog')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#F5A623] text-[#1C1310] text-[11px] font-bold uppercase tracking-wider cursor-pointer"
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#F5A623] text-[#1C1310] text-[10px] font-bold uppercase tracking-wider cursor-pointer"
             >
-              <Shield className="w-3.5 h-3.5" />
+              <Shield className="w-3 h-3" />
               <span>Exit Admin</span>
             </button>
           )}
