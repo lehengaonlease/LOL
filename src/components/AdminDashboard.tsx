@@ -878,7 +878,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* Top Navbar Logo Upload */}
-            <div className="space-y-2">
+            <div className="space-y-3">
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70">
                 Top Navbar Logo Image (Leave empty to use Gold Text Lockup `लोल | LOL COUTURE`)
               </label>
@@ -921,6 +921,70 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     Clear
                   </button>
                 )}
+              </div>
+
+              {/* Top Logo Size Slider & Presets */}
+              <div className="p-3.5 rounded-xl bg-[#FAF8F5] border border-[#1C1310]/10 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/75">
+                    Top Logo Size (Height):{' '}
+                    <strong className="text-[#E85D24] font-mono-num">
+                      {draftSettings.topLogoHeight || 56}px
+                    </strong>
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {[
+                      { label: 'S (36px)', val: 36 },
+                      { label: 'M (56px)', val: 56 },
+                      { label: 'L (76px)', val: 76 },
+                      { label: 'XL (100px)', val: 100 },
+                    ].map((preset) => (
+                      <button
+                        key={preset.val}
+                        type="button"
+                        onClick={() =>
+                          setDraftSettings({ ...draftSettings, topLogoHeight: preset.val })
+                        }
+                        className={`px-2 py-1 rounded text-[10px] font-semibold transition-colors cursor-pointer ${
+                          (draftSettings.topLogoHeight || 56) === preset.val
+                            ? 'bg-[#1C1310] text-white'
+                            : 'bg-white text-[#1C1310]/70 border border-[#1C1310]/12 hover:text-[#1C1310]'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={24}
+                    max={140}
+                    step={2}
+                    value={draftSettings.topLogoHeight || 56}
+                    onChange={(e) =>
+                      setDraftSettings({
+                        ...draftSettings,
+                        topLogoHeight: Number(e.target.value),
+                      })
+                    }
+                    className="flex-1 accent-[#E85D24] cursor-pointer"
+                  />
+                  <input
+                    type="number"
+                    min={20}
+                    max={200}
+                    value={draftSettings.topLogoHeight || 56}
+                    onChange={(e) =>
+                      setDraftSettings({
+                        ...draftSettings,
+                        topLogoHeight: Math.max(20, Math.min(200, Number(e.target.value) || 56)),
+                      })
+                    }
+                    className="w-16 px-2 py-1 bg-white border border-[#1C1310]/15 rounded-lg text-xs font-mono-num text-center text-[#1C1310]"
+                  />
+                </div>
               </div>
             </div>
 
@@ -968,7 +1032,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* Bottom Footer Logo Upload */}
-            <div className="space-y-2 pt-3 border-t border-[#1C1310]/8">
+            <div className="space-y-3 pt-3 border-t border-[#1C1310]/8">
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70">
                 Bottom Footer Logo Image (Leave empty to use Official LOL By Sanjeevani Vector Logo)
               </label>
@@ -1011,6 +1075,70 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     Clear
                   </button>
                 )}
+              </div>
+
+              {/* Bottom Logo Size Slider & Presets */}
+              <div className="p-3.5 rounded-xl bg-[#FAF8F5] border border-[#1C1310]/10 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/75">
+                    Bottom Logo Size (Height):{' '}
+                    <strong className="text-[#E85D24] font-mono-num">
+                      {draftSettings.bottomLogoHeight || 88}px
+                    </strong>
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {[
+                      { label: 'S (56px)', val: 56 },
+                      { label: 'M (88px)', val: 88 },
+                      { label: 'L (120px)', val: 120 },
+                      { label: 'XL (160px)', val: 160 },
+                    ].map((preset) => (
+                      <button
+                        key={preset.val}
+                        type="button"
+                        onClick={() =>
+                          setDraftSettings({ ...draftSettings, bottomLogoHeight: preset.val })
+                        }
+                        className={`px-2 py-1 rounded text-[10px] font-semibold transition-colors cursor-pointer ${
+                          (draftSettings.bottomLogoHeight || 88) === preset.val
+                            ? 'bg-[#1C1310] text-white'
+                            : 'bg-white text-[#1C1310]/70 border border-[#1C1310]/12 hover:text-[#1C1310]'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={36}
+                    max={200}
+                    step={2}
+                    value={draftSettings.bottomLogoHeight || 88}
+                    onChange={(e) =>
+                      setDraftSettings({
+                        ...draftSettings,
+                        bottomLogoHeight: Number(e.target.value),
+                      })
+                    }
+                    className="flex-1 accent-[#E85D24] cursor-pointer"
+                  />
+                  <input
+                    type="number"
+                    min={30}
+                    max={260}
+                    value={draftSettings.bottomLogoHeight || 88}
+                    onChange={(e) =>
+                      setDraftSettings({
+                        ...draftSettings,
+                        bottomLogoHeight: Math.max(30, Math.min(260, Number(e.target.value) || 88)),
+                      })
+                    }
+                    className="w-16 px-2 py-1 bg-white border border-[#1C1310]/15 rounded-lg text-xs font-mono-num text-center text-[#1C1310]"
+                  />
+                </div>
               </div>
             </div>
 
@@ -1077,18 +1205,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           {/* Right: Live Preview of Top & Bottom Logos */}
           <div className="lg:col-span-5 space-y-6">
             <div className="bg-[#1C1310] rounded-2xl p-6 text-white space-y-3">
-              <span className="text-[10px] uppercase tracking-widest text-[#F5A623] font-semibold block">
-                Top Navbar Logo Preview
-              </span>
-              <div className="p-4 rounded-xl bg-black/40 border border-white/10 flex items-center gap-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-widest text-[#F5A623] font-semibold">
+                  Top Navbar Logo Preview
+                </span>
+                <span className="text-[10px] font-mono-num text-white/60">
+                  Height: {draftSettings.topLogoHeight || 56}px
+                </span>
+              </div>
+              <div className="p-4 rounded-xl bg-black/40 border border-white/10 flex items-center gap-3 overflow-hidden">
                 {draftSettings.topLogoUrl ? (
                   <img
                     src={draftSettings.topLogoUrl}
                     alt="Top Logo Preview"
-                    className="h-12 w-auto object-contain"
+                    style={{ height: `${draftSettings.topLogoHeight || 56}px` }}
+                    className="w-auto object-contain transition-all duration-150"
                   />
                 ) : (
-                  <div className="flex items-center gap-2.5">
+                  <div
+                    className="flex items-center gap-2.5 origin-left transition-transform duration-150"
+                    style={{
+                      transform: `scale(${(draftSettings.topLogoHeight || 56) / 48})`,
+                    }}
+                  >
                     <span
                       className="text-3xl font-bold tracking-tight text-[#F5A623]"
                       style={{ fontFamily: "'Oswald', sans-serif" }}
@@ -1113,18 +1252,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             <div className="bg-[#1C1310] rounded-2xl p-6 text-white space-y-3">
-              <span className="text-[10px] uppercase tracking-widest text-[#F5A623] font-semibold block">
-                Bottom Footer Logo Preview
-              </span>
-              <div className="p-5 rounded-xl bg-white/95 text-[#1C1310] flex flex-col items-center justify-center">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-widest text-[#F5A623] font-semibold">
+                  Bottom Footer Logo Preview
+                </span>
+                <span className="text-[10px] font-mono-num text-white/60">
+                  Height: {draftSettings.bottomLogoHeight || 88}px
+                </span>
+              </div>
+              <div className="p-5 rounded-xl bg-white/95 text-[#1C1310] flex flex-col items-center justify-center overflow-hidden">
                 {draftSettings.bottomLogoUrl ? (
                   <img
                     src={draftSettings.bottomLogoUrl}
                     alt="Bottom Logo Preview"
-                    className="h-24 w-auto object-contain"
+                    style={{ height: `${draftSettings.bottomLogoHeight || 88}px` }}
+                    className="w-auto object-contain transition-all duration-150"
                   />
                 ) : (
-                  <LolBrandLogo variant="full" />
+                  <div
+                    className="transition-transform duration-150"
+                    style={{
+                      transform: `scale(${(draftSettings.bottomLogoHeight || 88) / 88})`,
+                    }}
+                  >
+                    <LolBrandLogo variant="full" />
+                  </div>
                 )}
               </div>
             </div>

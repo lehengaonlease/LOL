@@ -82,10 +82,16 @@ export const Navbar: React.FC<NavbarProps> = ({
             <img
               src={siteSettings.topLogoUrl}
               alt={siteSettings.brandTitle || 'LOL Couture'}
-              className="h-10 sm:h-12 w-auto object-contain"
+              style={{ height: `${siteSettings.topLogoHeight || 56}px` }}
+              className="w-auto object-contain transition-all duration-200"
             />
           ) : (
-            <>
+            <div
+              className="flex items-center gap-2.5 origin-left transition-transform duration-200"
+              style={{
+                transform: `scale(${(siteSettings.topLogoHeight || 56) / 48})`,
+              }}
+            >
               <span
                 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#F5A623] group-hover:text-[#FF7A00] transition-colors"
                 style={{ fontFamily: "'Oswald', sans-serif" }}
@@ -104,7 +110,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   {siteSettings.brandSubtitle || 'By Sanjeevani • Indore'}
                 </span>
               </div>
-            </>
+            </div>
           )}
         </button>
 

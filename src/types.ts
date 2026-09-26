@@ -29,6 +29,8 @@ export interface LehengaOutfit {
 export interface SiteSettings {
   topLogoUrl: string; // Empty string uses default vector/text lockup, or custom uploaded image URL
   bottomLogoUrl: string; // Empty string uses default vector/text lockup, or custom uploaded image URL
+  topLogoHeight: number; // Height in px for top navbar logo (default 56)
+  bottomLogoHeight: number; // Height in px for bottom footer logo (default 88)
   brandHindiMark: string;
   brandTitle: string;
   brandSubtitle: string;
@@ -43,6 +45,8 @@ export interface SiteSettings {
 export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   topLogoUrl: '',
   bottomLogoUrl: '',
+  topLogoHeight: 56,
+  bottomLogoHeight: 88,
   brandHindiMark: 'लोल',
   brandTitle: 'LOL COUTURE',
   brandSubtitle: 'By Sanjeevani • Indore',

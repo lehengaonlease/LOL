@@ -621,10 +621,16 @@ export function App() {
               <img
                 src={siteSettings.bottomLogoUrl}
                 alt={siteSettings.brandTitle || 'LOL By Sanjeevani'}
-                className="h-20 w-auto object-contain bg-white/95 rounded-xl p-2"
+                style={{ height: `${siteSettings.bottomLogoHeight || 88}px` }}
+                className="w-auto object-contain bg-white/95 rounded-xl p-2 transition-all duration-200"
               />
             ) : (
-              <div className="inline-block bg-white/95 rounded-2xl px-4 py-2.5">
+              <div
+                className="inline-block bg-white/95 rounded-2xl px-4 py-2.5 origin-left transition-transform duration-200"
+                style={{
+                  transform: `scale(${(siteSettings.bottomLogoHeight || 88) / 80})`,
+                }}
+              >
                 <LolBrandLogo variant="navbar" />
               </div>
             )}
