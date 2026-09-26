@@ -21,6 +21,17 @@ interface RentalModalProps {
 
 const STUDIO_WHATSAPP_NUMBER = '919826000000';
 
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'June', 'July', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec'];
+
+function formatTimelineDate(dateObj: Date): string {
+  const weekday = WEEKDAYS[dateObj.getDay()];
+  const day = dateObj.getDate();
+  const month = MONTHS[dateObj.getMonth()];
+  const year = dateObj.getFullYear();
+  return `${weekday}, ${day} ${month}, ${year}`;
+}
+
 export const RentalModal: React.FC<RentalModalProps> = ({
   outfit,
   onClose,
@@ -42,10 +53,14 @@ export const RentalModal: React.FC<RentalModalProps> = ({
   const [bookingComplete, setBookingComplete] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  if (!outfit) return null;
-
   const returnDateInfo = useMemo(() => {
-    if (!eventDate) return { dateStr: '', formatted: 'Select event date' };
+    if (!eventDate) {
+      return {
+        dateStr: '',
+        dateOnly: 'Select event date',
+        formatted: 'Select event date',
+      };
+    }
     const [year, month, day] = eventDate.split('-').map(Number);
     const dateObj = new Date(year, month - 1, day);
     dateObj.setDate(dateObj.getDate() + 1);
@@ -54,16 +69,12 @@ export const RentalModal: React.FC<RentalModalProps> = ({
     const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
     const dd = String(dateObj.getDate()).padStart(2, '0');
 
-    const formatted = dateObj.toLocaleDateString('en-IN', {
-      weekday: 'short',
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    });
+    const dateOnly = formatTimelineDate(dateObj);
 
     return {
       dateStr: `${yyyy}-${mm}-${dd}`,
-      formatted: `${formatted} by 6:00 PM`,
+      dateOnly,
+      formatted: `${dateOnly} (Before 12:00 PM)`,
     };
   }, [eventDate]);
 
@@ -71,34 +82,38 @@ export const RentalModal: React.FC<RentalModalProps> = ({
     if (!eventDate) return '';
     const [year, month, day] = eventDate.split('-').map(Number);
     const dateObj = new Date(year, month - 1, day);
-    return dateObj.toLocaleDateString('en-IN', {
-      weekday: 'short',
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    });
+    return formatTimelineDate(dateObj);
   }, [eventDate]);
 
   const whatsappBookingUrl = useMemo(() => {
+    if (!outfit) return '';
     const message = [
-      `Hi LOL (Lehenga On Lease) By Sanjeevani! ✨`,
+      `Hey LOL Team! 👋 `,
       ``,
-      `I'd like to reserve this lehenga in Indore:`,
-      `• *Outfit:* ${outfit.title}`,
-      `• *Code:* ${outfit.code}`,
-      `• *Rent:* ₹${outfit.pricePerDay.toLocaleString('en-IN')}/day (Retail ₹${outfit.retailPrice.toLocaleString('en-IN')})`,
-      `• *Event Date:* ${formattedEventDate}`,
-      `• *Next-Day Return:* ${returnDateInfo.formatted}`,
-      customerName ? `• *Name:* ${customerName}` : '',
-      customerPhone ? `• *Phone:* ${customerPhone}` : '',
+      `I'm ready to secure some serious main character energy! Can you please check if this outfit is available for my dates? 🥂🔥`,
       ``,
-      `✅ I agree to the 24-Hour Next-Day Return policy. Please share trial timings!`,
-    ]
-      .filter(Boolean)
-      .join('\n');
+      `🥻 OUTFIT DETAILS:`,
+      `▪️ Name: ${outfit.title}`,
+      `▪️ Code: ${outfit.code}`,
+      `▪️ Rent: ₹${outfit.pricePerDay.toLocaleString('en-IN')}/day`,
+      ``,
+      `📅 RENTAL TIMELINE:`,
+      `• Wear Date: ${formattedEventDate}`,
+      `• Return Deadline: ${returnDateInfo.dateOnly} (Before 12:00 PM)`,
+      ``,
+      `👤 MY DETAILS:`,
+      `• Name: ${customerName.trim() || 'Guest'}`,
+      `• Phone: ${customerPhone.trim() || 'Not provided'}`,
+      `--------------------------------------------`,
+      `✅ VIBE CHECK: Passed! I explicitly agree to the 24-Hour Next-Day Return Policy. `,
+      ``,
+      `Please share your available trial and Pickup slots so I can lock this look in! ✨🧡`,
+    ].join('\n');
 
     return `https://wa.me/${STUDIO_WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
-  }, [outfit, formattedEventDate, returnDateInfo.formatted, customerName, customerPhone]);
+  }, [outfit, formattedEventDate, returnDateInfo.dateOnly, customerName, customerPhone]);
+
+  if (!outfit) return null;
 
   const handleCompleteBooking = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -154,9 +169,6 @@ export const RentalModal: React.FC<RentalModalProps> = ({
         {/* Header */}
         <div className="px-6 py-5 border-b border-[#1C1310]/10 flex items-center justify-between bg-[#FAF8F5]">
           <div>
-            <span className="text-[10px] uppercase tracking-[0.2em] text-[#E85D24] font-semibold block">
-              Instant Studio Reservation • {outfit.code}
-            </span>
             <h3 className="font-editorial text-2xl font-semibold text-[#1C1310]">
               Reserve Your Lehenga
             </h3>
@@ -187,9 +199,6 @@ export const RentalModal: React.FC<RentalModalProps> = ({
               <div className="flex items-baseline gap-2 mt-0.5">
                 <span className="text-base font-semibold text-[#E85D24]">
                   ₹{outfit.pricePerDay.toLocaleString('en-IN')}/day
-                </span>
-                <span className="text-xs text-[#1C1310]/40 line-through">
-                  MRP ₹{outfit.retailPrice.toLocaleString('en-IN')}
                 </span>
               </div>
             </div>
@@ -294,9 +303,6 @@ export const RentalModal: React.FC<RentalModalProps> = ({
                   </span>
                   <p className="text-xs font-semibold text-[#1C1310] mt-1">
                     {returnDateInfo.formatted}
-                  </p>
-                  <p className="text-[10px] text-[#1C1310]/55">
-                    Steam-cleaning handled by our studio
                   </p>
                 </div>
               </div>

@@ -71,7 +71,10 @@ export const HeroSection: React.FC<HeroSectionProps> = ({ siteSettings }) => {
   };
 
   return (
-    <section className="relative w-full h-screen min-h-[640px] max-h-[960px] overflow-hidden bg-[#2B180A] select-none">
+    <section
+      id="hero-banner"
+      className="relative w-full h-screen min-h-[640px] max-h-[960px] overflow-hidden bg-[#2B180A] select-none"
+    >
       {/* Full-Bleed Muted Looping Video or Image Background (Managed strictly via /admin Backend) */}
       {isImageBanner ? (
         <img

@@ -1,27 +1,21 @@
 export type MediaType = 'image' | 'video';
 
-export type VibeCategory =
-  | 'All Vibes'
-  | 'Sangeet Main Character'
-  | 'Haldi & Sundowner'
-  | 'Cocktail Slay'
-  | 'Reception Royalty'
-  | 'Ex-Cousin Wedding';
+export type VibeCategory = string;
 
 export interface LehengaOutfit {
   id: string;
   code: string;
   title: string;
   pricePerDay: number;
-  retailPrice: number;
   description: string;
   ogHumorTagline: string;
   mediaUrl: string;
   mediaType: MediaType;
+  images?: string[];
+  videoUrl?: string;
   galleryUrls?: string[];
-  vibeCategory: Exclude<VibeCategory, 'All Vibes'>;
+  vibeCategory: string;
   sizes: string[];
-  indoreHotspot: string;
   available: boolean;
   createdAt: string;
 }
@@ -107,4 +101,15 @@ export interface StudioTaskReminder {
   due?: string;
   status: 'needsAction' | 'completed';
   outfitCode?: string;
+}
+
+export interface CustomerTestimonial {
+  id: string;
+  customerName: string;
+  indoreLocation: string;
+  rating: number;
+  quote: string;
+  photoUrl: string;
+  outfitCode?: string;
+  createdAt: string;
 }

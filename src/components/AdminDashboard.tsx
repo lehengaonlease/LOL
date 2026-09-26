@@ -3,12 +3,9 @@ import {
   Plus,
   Trash2,
   Upload,
-  Sparkles,
   Tag,
   IndianRupee,
-  RotateCcw,
   CheckCircle2,
-  MapPin,
   ArrowLeft,
   Film,
   Image as ImageIcon,
@@ -19,27 +16,19 @@ import {
   Save,
   X,
 } from 'lucide-react';
-import { LehengaOutfit, VibeCategory, SiteSettings, DEFAULT_SITE_SETTINGS } from '../types';
+import { LehengaOutfit, SiteSettings, DEFAULT_SITE_SETTINGS } from '../types';
 import { LolBrandLogo } from './LolBrandLogo';
 
 interface AdminDashboardProps {
   outfits: LehengaOutfit[];
   siteSettings: SiteSettings;
   onUpdateSiteSettings: (settings: SiteSettings) => Promise<void> | void;
-  onAddOutfit: (outfit: LehengaOutfit) => void;
-  onUpdateOutfit: (outfit: LehengaOutfit) => void;
-  onDeleteOutfit: (id: string) => void;
+  onAddOutfit: (outfit: LehengaOutfit) => Promise<void> | void;
+  onUpdateOutfit: (outfit: LehengaOutfit) => Promise<void> | void;
+  onDeleteOutfit: (id: string) => Promise<void> | void;
   onResetCatalog: () => void;
   onBackToCatalog: () => void;
 }
-
-const VIBE_OPTIONS: Exclude<VibeCategory, 'All Vibes'>[] = [
-  'Sangeet Main Character',
-  'Ex-Cousin Wedding',
-  'Haldi & Sundowner',
-  'Cocktail Slay',
-  'Reception Royalty',
-];
 
 const HUMOR_TEMPLATES = [
   {
@@ -47,7 +36,7 @@ const HUMOR_TEMPLATES = [
     description:
       "So blindingly gorgeous that relatives will forget to ask 'Beta, aage kya plan hai?' Pure raw silk with antique gold zardosi. Zero storage trauma, 100% Instagram feed dominance.",
     ogTagline:
-      'Why spend ₹60,000 when you can break Instagram for ₹2,499/day? Rent it, flex it, return it tomorrow. 🔥',
+      'Why spend a fortune when you can break Instagram for ₹2,499/day? Rent it, flex it, return it tomorrow. 🔥',
   },
   {
     label: 'Ex’s Cousin’s Shaadi',
@@ -72,7 +61,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onAddOutfit,
   onUpdateOutfit,
   onDeleteOutfit,
-  onResetCatalog,
   onBackToCatalog,
 }) => {
   const [activeTab, setActiveTab] = useState<'lehengas' | 'banner' | 'branding'>('lehengas');
@@ -90,17 +78,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [title, setTitle] = useState('');
   const [code, setCode] = useState(defaultCode);
   const [pricePerDay, setPricePerDay] = useState('2499');
-  const [retailPrice, setRetailPrice] = useState('55000');
-  const [vibeCategory, setVibeCategory] =
-    useState<Exclude<VibeCategory, 'All Vibes'>>('Sangeet Main Character');
-  const [indoreHotspot, setIndoreHotspot] = useState('Sayaji & Sheraton Grand Sangeets');
+  const [vibeCategory, setVibeCategory] = useState('Sangeet Main Character');
   const [sizesInput, setSizesInput] = useState('XS-S, M-L');
   const [description, setDescription] = useState(HUMOR_TEMPLATES[0].description);
   const [ogHumorTagline, setOgHumorTagline] = useState(HUMOR_TEMPLATES[0].ogTagline);
-  const [mediaUrl, setMediaUrl] = useState('/images/lehenga-orange-zardosi.jpg');
-  const [mediaType, setMediaType] = useState<'image' | 'video'>('image');
 
-  const outfitFileInputRef = useRef<HTMLInputElement | null>(null);
+  // 4 Images + 1 Video state
+  const [imageSlots, setImageSlots] = useState<[string, string, string, string]>([
+    '/images/lehenga-orange-zardosi.jpg',
+    '',
+    '',
+    '',
+  ]);
+  const [videoUrl, setVideoUrl] = useState('');
+  const [uploadingSlot, setUploadingSlot] = useState<string | null>(null);
+
+  const imageInputRefs = [
+    useRef<HTMLInputElement | null>(null),
+    useRef<HTMLInputElement | null>(null),
+    useRef<HTMLInputElement | null>(null),
+    useRef<HTMLInputElement | null>(null),
+  ];
+  const multiImageInputRef = useRef<HTMLInputElement | null>(null);
+  const outfitVideoInputRef = useRef<HTMLInputElement | null>(null);
   const heroVideoInputRef = useRef<HTMLInputElement | null>(null);
   const heroPosterInputRef = useRef<HTMLInputElement | null>(null);
   const topLogoInputRef = useRef<HTMLInputElement | null>(null);
@@ -154,19 +154,67 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   };
 
-  // Handle Lehenga Image/Video File Upload
-  const handleOutfitFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageSlotChange = (index: number, val: string) => {
+    setImageSlots((prev) => {
+      const next = [...prev] as [string, string, string, string];
+      next[index] = val;
+      return next;
+    });
+  };
+
+  const handleSingleImageUpload = async (
+    index: number,
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const isVideo = file.type.startsWith('video/');
-    setIsSavingSettings(true);
+    setUploadingSlot(`img-${index}`);
     try {
-      const uploadedUrl = await uploadFileToBackend(file, 'lehenga');
-      setMediaUrl(uploadedUrl);
-      setMediaType(isVideo ? 'video' : 'image');
-      showToast(`Uploaded ${isVideo ? 'video' : 'photo'} for lehenga.`);
+      const uploadedUrl = await uploadFileToBackend(file, `lehenga-img-${index + 1}`);
+      handleImageSlotChange(index, uploadedUrl);
+      showToast(`Uploaded Image ${index + 1} for lehenga.`);
     } finally {
-      setIsSavingSettings(false);
+      setUploadingSlot(null);
+      e.target.value = '';
+    }
+  };
+
+  const handleBatchImagesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []).slice(0, 4);
+    if (files.length === 0) return;
+    setUploadingSlot('batch-img');
+    try {
+      const uploadedUrls = await Promise.all(
+        files.map((file, idx) => uploadFileToBackend(file, `lehenga-img-${idx + 1}`))
+      );
+      setImageSlots((prev) => {
+        const next = [...prev] as [string, string, string, string];
+        let cursor = 0;
+        for (let i = 0; i < 4 && cursor < uploadedUrls.length; i++) {
+          if (!next[i] || i < uploadedUrls.length) {
+            next[i] = uploadedUrls[cursor++];
+          }
+        }
+        return next;
+      });
+      showToast(`Uploaded ${uploadedUrls.length} photo(s) for lehenga.`);
+    } finally {
+      setUploadingSlot(null);
+      e.target.value = '';
+    }
+  };
+
+  const handleOutfitVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingSlot('video');
+    try {
+      const uploadedUrl = await uploadFileToBackend(file, 'lehenga-video');
+      setVideoUrl(uploadedUrl);
+      showToast('Uploaded twirl video for lehenga.');
+    } finally {
+      setUploadingSlot(null);
+      e.target.value = '';
     }
   };
 
@@ -176,14 +224,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setTitle(item.title);
     setCode(item.code);
     setPricePerDay(String(item.pricePerDay));
-    setRetailPrice(String(item.retailPrice));
     setVibeCategory(item.vibeCategory);
-    setIndoreHotspot(item.indoreHotspot);
     setSizesInput(item.sizes.join(', '));
     setDescription(item.description);
     setOgHumorTagline(item.ogHumorTagline);
-    setMediaUrl(item.mediaUrl);
-    setMediaType(item.mediaType);
+
+    const existingImages =
+      Array.isArray(item.images) && item.images.length > 0
+        ? item.images
+        : item.mediaType === 'image' && item.mediaUrl
+        ? [item.mediaUrl]
+        : [];
+
+    setImageSlots([
+      existingImages[0] || '',
+      existingImages[1] || '',
+      existingImages[2] || '',
+      existingImages[3] || '',
+    ]);
+    setVideoUrl(item.videoUrl || (item.mediaType === 'video' ? item.mediaUrl : ''));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -192,14 +251,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setTitle('');
     setCode(`LOL-IND-0${outfits.length + 1}`);
     setPricePerDay('2499');
-    setRetailPrice('55000');
-    setMediaUrl('/images/lehenga-orange-zardosi.jpg');
-    setMediaType('image');
+    setVibeCategory('Sangeet Main Character');
+    setImageSlots(['/images/lehenga-orange-zardosi.jpg', '', '', '']);
+    setVideoUrl('');
   };
 
-  const handleOutfitSubmit = (e: React.FormEvent) => {
+  const handleOutfitSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
+
+    const validImages = imageSlots.map((s) => s.trim()).filter(Boolean).slice(0, 4);
+    const cleanVideoUrl = videoUrl.trim();
+    const primaryMediaUrl =
+      validImages[0] || cleanVideoUrl || '/images/lehenga-orange-zardosi.jpg';
+    const primaryMediaType: 'image' | 'video' =
+      validImages.length > 0 ? 'image' : cleanVideoUrl ? 'video' : 'image';
+    const finalImages =
+      validImages.length > 0
+        ? validImages
+        : primaryMediaType === 'image'
+        ? [primaryMediaUrl]
+        : [];
 
     if (editingOutfitId) {
       const existing = outfits.find((o) => o.id === editingOutfitId);
@@ -208,22 +280,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         code: code.trim().toUpperCase() || defaultCode,
         title: title.trim(),
         pricePerDay: Math.max(499, Number(pricePerDay) || 2499),
-        retailPrice: Math.max(5000, Number(retailPrice) || 55000),
         description: description.trim(),
         ogHumorTagline: ogHumorTagline.trim(),
-        mediaUrl: mediaUrl.trim() || '/images/lehenga-orange-zardosi.jpg',
-        mediaType,
-        vibeCategory,
+        mediaUrl: primaryMediaUrl,
+        mediaType: primaryMediaType,
+        images: finalImages,
+        videoUrl: cleanVideoUrl || undefined,
+        vibeCategory: vibeCategory.trim() || 'Sangeet Main Character',
         sizes: sizesInput
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean),
-        indoreHotspot: indoreHotspot.trim() || 'Indore Bridal & Sangeet Approved',
         available: existing ? existing.available : true,
         createdAt: existing ? existing.createdAt : new Date().toISOString(),
       };
-      onUpdateOutfit(updatedOutfit);
-      showToast(`Updated "${updatedOutfit.title}" (${updatedOutfit.code}) on live storefront.`);
+      await onUpdateOutfit(updatedOutfit);
+      showToast(`Updated "${updatedOutfit.title}" (${updatedOutfit.code}) — live on store now!`);
       cancelEditingOutfit();
     } else {
       const newOutfit: LehengaOutfit = {
@@ -231,25 +303,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         code: code.trim().toUpperCase() || defaultCode,
         title: title.trim(),
         pricePerDay: Math.max(499, Number(pricePerDay) || 2499),
-        retailPrice: Math.max(5000, Number(retailPrice) || 55000),
         description: description.trim(),
         ogHumorTagline: ogHumorTagline.trim(),
-        mediaUrl: mediaUrl.trim() || '/images/lehenga-orange-zardosi.jpg',
-        mediaType,
-        vibeCategory,
+        mediaUrl: primaryMediaUrl,
+        mediaType: primaryMediaType,
+        images: finalImages,
+        videoUrl: cleanVideoUrl || undefined,
+        vibeCategory: vibeCategory.trim() || 'Sangeet Main Character',
         sizes: sizesInput
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean),
-        indoreHotspot: indoreHotspot.trim() || 'Indore Bridal & Sangeet Approved',
         available: true,
         createdAt: new Date().toISOString(),
       };
 
-      onAddOutfit(newOutfit);
-      showToast(`Published "${newOutfit.title}" (${newOutfit.code}) to live storefront.`);
+      await onAddOutfit(newOutfit);
+      showToast(`Published "${newOutfit.title}" (${newOutfit.code}) — live on store now!`);
       setTitle('');
       setCode(`LOL-IND-0${outfits.length + 2}`);
+      setImageSlots(['/images/lehenga-orange-zardosi.jpg', '', '', '']);
+      setVideoUrl('');
     }
   };
 
@@ -308,7 +382,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           }`}
         >
           <ShoppingBag className="w-4 h-4 text-[#E85D24]" />
-          <span>1. Lehenga Collection & Photos/Videos ({outfits.length})</span>
+          <span>Inventory Management</span>
         </button>
 
         <button
@@ -320,7 +394,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           }`}
         >
           <Film className="w-4 h-4 text-[#E85D24]" />
-          <span>2. Hero Video & Banner Manager</span>
+          <span>Banner Management</span>
         </button>
 
         <button
@@ -332,7 +406,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           }`}
         >
           <Palette className="w-4 h-4 text-[#E85D24]" />
-          <span>3. Top & Bottom Logos & Studio Info</span>
+          <span>Logo Management</span>
         </button>
       </div>
 
@@ -410,7 +484,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
                   Rent Per Day (₹) *
@@ -429,74 +503,191 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               <div>
                 <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
-                  Boutique MRP (₹) *
+                  Occasion Edit (Fully Customizable) *
                 </label>
                 <input
-                  type="number"
+                  type="text"
                   required
-                  value={retailPrice}
-                  onChange={(e) => setRetailPrice(e.target.value)}
+                  value={vibeCategory}
+                  onChange={(e) => setVibeCategory(e.target.value)}
+                  placeholder="Type custom occasion (e.g., Sangeet Main Character, Bridal Entry...)"
                   className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310] focus:outline-none focus:bg-white focus:border-[#1C1310]"
                 />
               </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
-                  Occasion Edit
-                </label>
-                <select
-                  value={vibeCategory}
-                  onChange={(e) =>
-                    setVibeCategory(e.target.value as Exclude<VibeCategory, 'All Vibes'>)
-                  }
-                  className="w-full px-3 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310] focus:outline-none focus:bg-white focus:border-[#1C1310]"
-                >
-                  {VIBE_OPTIONS.map((v) => (
-                    <option key={v} value={v}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-              </div>
             </div>
 
-            {/* Lehenga Photo or Video Upload */}
-            <div className="space-y-2">
-              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70">
-                Lehenga Photo or Twirl Video
-              </label>
-              <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
-                <div className="w-16 h-20 rounded-xl overflow-hidden bg-[#FAF8F5] border border-[#1C1310]/15 shrink-0">
-                  {mediaType === 'video' ? (
-                    <video src={mediaUrl} className="w-full h-full object-cover" muted loop autoPlay playsInline />
-                  ) : (
-                    <img src={mediaUrl} alt="Preview" className="w-full h-full object-cover object-top" />
-                  )}
+            {/* 4 Lehenga Images + 1 Twirl Video Upload Section */}
+            <div className="space-y-4 p-4 rounded-2xl bg-[#FAF8F5] border border-[#1C1310]/10">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]">
+                    Lehenga Media Gallery (Up to 4 Images & 1 Video)
+                  </label>
+                  <p className="text-[11px] text-[#1C1310]/55">
+                    Add up to 4 high-res photos (Image 1 is the primary cover) and 1 optional twirl
+                    video.
+                  </p>
                 </div>
-                <div className="flex-1 w-full space-y-2">
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <input
-                      type="text"
-                      value={mediaUrl}
-                      onChange={(e) => setMediaUrl(e.target.value)}
-                      placeholder="Paste image/video URL or click Upload File..."
-                      className="flex-1 px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310] focus:outline-none focus:bg-white focus:border-[#1C1310]"
-                    />
-                    <input
-                      ref={outfitFileInputRef}
-                      type="file"
-                      accept="image/*,video/*"
-                      onChange={handleOutfitFileUpload}
-                      className="hidden"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => outfitFileInputRef.current?.click()}
-                      className="px-4 py-2.5 rounded-xl border border-[#1C1310]/15 bg-[#FAF8F5] hover:bg-white text-xs font-semibold text-[#1C1310] inline-flex items-center justify-center gap-2 cursor-pointer shrink-0"
+
+                <div>
+                  <input
+                    ref={multiImageInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={handleBatchImagesUpload}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => multiImageInputRef.current?.click()}
+                    disabled={uploadingSlot !== null}
+                    className="px-3 py-1.5 rounded-lg bg-[#1C1310] hover:bg-[#E85D24] text-white text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>
+                      {uploadingSlot === 'batch-img'
+                        ? 'Uploading Photos...'
+                        : 'Select Up to 4 Photos'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 4 Image Slots Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {[0, 1, 2, 3].map((slotIdx) => {
+                  const imgUrl = imageSlots[slotIdx];
+                  const isUploadingThis = uploadingSlot === `img-${slotIdx}`;
+                  return (
+                    <div
+                      key={slotIdx}
+                      className="flex items-center gap-2.5 p-2.5 rounded-xl bg-white border border-[#1C1310]/12"
                     >
-                      <Upload className="w-3.5 h-3.5 text-[#E85D24]" />
-                      <span>Upload Photo / Video</span>
-                    </button>
+                      <div className="w-12 h-16 rounded-lg overflow-hidden bg-[#EFECE6] border border-[#1C1310]/10 shrink-0 flex items-center justify-center">
+                        {imgUrl ? (
+                          <img
+                            src={imgUrl}
+                            alt={`Slot ${slotIdx + 1}`}
+                            className="w-full h-full object-cover object-top"
+                          />
+                        ) : (
+                          <ImageIcon className="w-4 h-4 text-[#1C1310]/30" />
+                        )}
+                      </div>
+
+                      <div className="flex-1 min-w-0 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-semibold uppercase tracking-wider text-[#1C1310]/70">
+                            {slotIdx === 0 ? 'Image 1 (Cover) *' : `Image ${slotIdx + 1}`}
+                          </span>
+                          {imgUrl && (
+                            <button
+                              type="button"
+                              onClick={() => handleImageSlotChange(slotIdx, '')}
+                              className="text-[10px] text-red-600 hover:underline cursor-pointer"
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </div>
+
+                        <input
+                          type="text"
+                          value={imgUrl}
+                          onChange={(e) => handleImageSlotChange(slotIdx, e.target.value)}
+                          placeholder={`Paste Image ${slotIdx + 1} URL or upload...`}
+                          className="w-full px-2.5 py-1.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-lg text-[11px] text-[#1C1310] focus:outline-none focus:bg-white focus:border-[#1C1310]"
+                        />
+
+                        <div>
+                          <input
+                            ref={imageInputRefs[slotIdx]}
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => handleSingleImageUpload(slotIdx, e)}
+                            className="hidden"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => imageInputRefs[slotIdx].current?.click()}
+                            disabled={uploadingSlot !== null}
+                            className="w-full py-1 px-2.5 rounded-lg border border-[#1C1310]/15 bg-[#FAF8F5] hover:bg-white text-[10px] font-semibold text-[#1C1310] inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            <Upload className="w-3 h-3 text-[#E85D24]" />
+                            <span>
+                              {isUploadingThis ? 'Uploading...' : `Upload Image ${slotIdx + 1}`}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 1 Video Slot */}
+              <div className="pt-2 border-t border-[#1C1310]/10">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 p-3 rounded-xl bg-white border border-[#1C1310]/12">
+                  <div className="w-14 h-18 rounded-lg overflow-hidden bg-[#1C1310] border border-[#1C1310]/15 shrink-0 flex items-center justify-center">
+                    {videoUrl ? (
+                      <video
+                        src={videoUrl}
+                        className="w-full h-full object-cover"
+                        muted
+                        loop
+                        autoPlay
+                        playsInline
+                      />
+                    ) : (
+                      <Film className="w-5 h-5 text-[#E85D24]" />
+                    )}
+                  </div>
+
+                  <div className="flex-1 w-full space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-[#1C1310]/75 flex items-center gap-1.5">
+                        <Film className="w-3.5 h-3.5 text-[#E85D24]" />
+                        <span>1 Lehenga Video (Twirl / Reel MP4 or WebM)</span>
+                      </span>
+                      {videoUrl && (
+                        <button
+                          type="button"
+                          onClick={() => setVideoUrl('')}
+                          className="text-[10px] text-red-600 hover:underline cursor-pointer"
+                        >
+                          Remove Video
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="text"
+                        value={videoUrl}
+                        onChange={(e) => setVideoUrl(e.target.value)}
+                        placeholder="Paste video URL (.mp4 / .webm) or click Upload Video..."
+                        className="flex-1 px-3 py-2 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-lg text-xs text-[#1C1310] focus:outline-none focus:bg-white focus:border-[#1C1310]"
+                      />
+                      <input
+                        ref={outfitVideoInputRef}
+                        type="file"
+                        accept="video/mp4,video/webm,video/quicktime,video/*"
+                        onChange={handleOutfitVideoUpload}
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => outfitVideoInputRef.current?.click()}
+                        disabled={uploadingSlot !== null}
+                        className="px-3.5 py-2 rounded-lg border border-[#1C1310]/15 bg-[#FAF8F5] hover:bg-white text-xs font-semibold text-[#1C1310] inline-flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                      >
+                        <Upload className="w-3.5 h-3.5 text-[#E85D24]" />
+                        <span>
+                          {uploadingSlot === 'video' ? 'Uploading Video...' : 'Upload 1 Video'}
+                        </span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -532,32 +723,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
-                  Available Sizes (comma separated)
-                </label>
-                <input
-                  type="text"
-                  value={sizesInput}
-                  onChange={(e) => setSizesInput(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310]"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
-                  Indore Venue Recommendation
-                </label>
-                <div className="relative">
-                  <MapPin className="w-3.5 h-3.5 text-[#1C1310]/40 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={indoreHotspot}
-                    onChange={(e) => setIndoreHotspot(e.target.value)}
-                    className="w-full pl-8 pr-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310]"
-                  />
-                </div>
-              </div>
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
+                Available Sizes (comma separated)
+              </label>
+              <input
+                type="text"
+                value={sizesInput}
+                onChange={(e) => setSizesInput(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310]"
+              />
             </div>
 
             <button
@@ -586,68 +761,84 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   Live Lehengas ({outfits.length})
                 </h3>
                 <p className="text-[11px] text-[#1C1310]/55">
-                  Click the pencil icon on any lehenga to change its photo, video, or price.
+                  Click the pencil icon on any lehenga to edit its 4 photos, video, occasion, or
+                  price.
                 </p>
               </div>
-              <button
-                onClick={onResetCatalog}
-                title="Reset to default collection"
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#1C1310]/12 text-[11px] text-[#1C1310]/70 hover:text-[#1C1310] cursor-pointer"
-              >
-                <RotateCcw className="w-3 h-3" />
-                <span>Reset</span>
-              </button>
             </div>
 
             <div className="space-y-3 max-h-[560px] overflow-y-auto luxury-scroll pr-1">
-              {outfits.map((item) => (
-                <div
-                  key={item.id}
-                  className={`flex items-center gap-3.5 p-3 rounded-xl border transition-colors ${
-                    editingOutfitId === item.id
-                      ? 'bg-[#FFF5EE] border-[#E85D24]'
-                      : 'bg-[#FAF8F5] border-[#1C1310]/8'
-                  }`}
-                >
-                  <img
-                    src={item.mediaUrl}
-                    alt={item.title}
-                    className="w-14 h-18 rounded-lg object-cover object-top bg-[#EFECE6] shrink-0"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <span className="text-[10px] font-mono-num font-semibold text-[#E85D24]">
-                      {item.code}
-                    </span>
-                    <h4 className="font-editorial text-lg font-semibold text-[#1C1310] truncate">
-                      {item.title}
-                    </h4>
-                    <p className="text-xs text-[#1C1310]/65">
-                      ₹{item.pricePerDay.toLocaleString('en-IN')}/day •{' '}
-                      <span className="line-through text-[#1C1310]/40">
-                        ₹{item.retailPrice.toLocaleString('en-IN')}
-                      </span>
-                    </p>
+              {outfits.map((item) => {
+                const imgCount =
+                  Array.isArray(item.images) && item.images.length > 0
+                    ? item.images.length
+                    : item.mediaType === 'image'
+                    ? 1
+                    : 0;
+                const hasVideo = Boolean(item.videoUrl || item.mediaType === 'video');
+                return (
+                  <div
+                    key={item.id}
+                    className={`flex items-center gap-3.5 p-3 rounded-xl border transition-colors ${
+                      editingOutfitId === item.id
+                        ? 'bg-[#FFF5EE] border-[#E85D24]'
+                        : 'bg-[#FAF8F5] border-[#1C1310]/8'
+                    }`}
+                  >
+                    {item.mediaType === 'video' && (!item.images || item.images.length === 0) ? (
+                      <video
+                        src={item.videoUrl || item.mediaUrl}
+                        className="w-14 h-18 rounded-lg object-cover bg-[#EFECE6] shrink-0"
+                        muted
+                      />
+                    ) : (
+                      <img
+                        src={(item.images && item.images[0]) || item.mediaUrl}
+                        alt={item.title}
+                        className="w-14 h-18 rounded-lg object-cover object-top bg-[#EFECE6] shrink-0"
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-mono-num font-semibold text-[#E85D24]">
+                          {item.code}
+                        </span>
+                        <span className="text-[10px] text-[#1C1310]/50 truncate">
+                          • {item.vibeCategory}
+                        </span>
+                      </div>
+                      <h4 className="font-editorial text-lg font-semibold text-[#1C1310] truncate">
+                        {item.title}
+                      </h4>
+                      <p className="text-xs text-[#1C1310]/65">
+                        ₹{item.pricePerDay.toLocaleString('en-IN')}/day •{' '}
+                        <span className="text-[10px] text-[#1C1310]/50">
+                          {imgCount} photo{imgCount === 1 ? '' : 's'}
+                          {hasVideo ? ' + 1 video' : ''}
+                        </span>
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => startEditingOutfit(item)}
+                        title="Edit lehenga photo/details"
+                        className="p-2 rounded-lg text-[#1C1310]/65 hover:text-[#E85D24] hover:bg-white transition-colors cursor-pointer"
+                      >
+                        <Edit3 className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDeleteOutfit(item.id)}
+                        title="Remove outfit"
+                        className="p-2 rounded-lg text-[#1C1310]/45 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => startEditingOutfit(item)}
-                      title="Edit lehenga photo/details"
-                      className="p-2 rounded-lg text-[#1C1310]/65 hover:text-[#E85D24] hover:bg-white transition-colors cursor-pointer"
-                    >
-                      <Edit3 className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onDeleteOutfit(item.id)}
-                      title="Remove outfit"
-                      className="p-2 rounded-lg text-[#1C1310]/45 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>

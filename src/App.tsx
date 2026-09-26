@@ -8,10 +8,10 @@ import {
   ShieldCheck,
   Clock,
   Ruler,
-  CheckCircle2,
   Lock,
 } from 'lucide-react';
 import { INITIAL_OUTFITS } from './data/initialOutfits';
+import { INITIAL_TESTIMONIALS } from './data/initialTestimonials';
 import {
   LehengaOutfit,
   VibeCategory,
@@ -19,6 +19,7 @@ import {
   StudioTaskReminder,
   SiteSettings,
   DEFAULT_SITE_SETTINGS,
+  CustomerTestimonial,
 } from './types';
 import { Navbar } from './components/Navbar';
 import { HeroSection } from './components/HeroSection';
@@ -29,6 +30,7 @@ import { ShareModal } from './components/ShareModal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { GoogleTasksDrawer } from './components/GoogleTasksDrawer';
 import { LolBrandLogo } from './components/LolBrandLogo';
+import { TestimonialSection } from './components/TestimonialSection';
 import {
   requestGoogleTasksToken,
   getStoredAccessToken,
@@ -42,15 +44,8 @@ const STORAGE_KEY_OUTFITS = 'lol_indore_outfits_v2';
 const STORAGE_KEY_TASKS = 'lol_indore_tasks_v2';
 const STORAGE_KEY_WISHLIST = 'lol_indore_wishlist_v2';
 const STORAGE_KEY_SITE_SETTINGS = 'lol_indore_site_settings_v1';
-
-const VIBE_FILTERS: { label: string; value: VibeCategory }[] = [
-  { label: 'All Couture', value: 'All Vibes' },
-  { label: 'Sangeet Edit', value: 'Sangeet Main Character' },
-  { label: 'Haldi & Mehendi', value: 'Haldi & Sundowner' },
-  { label: 'Cocktail Couture', value: 'Cocktail Slay' },
-  { label: 'Reception Royalty', value: 'Reception Royalty' },
-  { label: "Ex's Shaadi Edit", value: 'Ex-Cousin Wedding' },
-];
+const STORAGE_KEY_TESTIMONIALS = 'lol_indore_testimonials_v2';
+const CATALOG_SYNC_CHANNEL = 'lol_indore_catalog_sync_v1';
 
 function detectInitialView(): 'catalog' | 'admin' {
   const pathname = window.location.pathname.toLowerCase();
@@ -66,6 +61,35 @@ function detectInitialView(): 'catalog' | 'admin' {
     return 'admin';
   }
   return 'catalog';
+}
+
+function findOutfitFromLocation(outfitsList: LehengaOutfit[]): LehengaOutfit | null {
+  const params = new URLSearchParams(window.location.search);
+  const queryOutfit = params.get('outfit');
+  const rawPath = decodeURIComponent(window.location.pathname).replace(/^\/+|\/+$/g, '');
+
+  let candidateSlug = '';
+  if (queryOutfit) {
+    candidateSlug = queryOutfit.trim().toLowerCase();
+  } else if (rawPath.toLowerCase().startsWith('outfit/')) {
+    candidateSlug = rawPath.slice('outfit/'.length).trim().toLowerCase();
+  } else if (rawPath.toLowerCase().startsWith('lehenga/')) {
+    candidateSlug = rawPath.slice('lehenga/'.length).trim().toLowerCase();
+  } else if (rawPath.toLowerCase().startsWith('share/')) {
+    candidateSlug = rawPath.slice('share/'.length).trim().toLowerCase();
+  } else if (rawPath && rawPath.toLowerCase() !== 'admin') {
+    candidateSlug = rawPath.trim().toLowerCase();
+  }
+
+  if (!candidateSlug) return null;
+
+  return (
+    outfitsList.find(
+      (o) =>
+        o.id.toLowerCase() === candidateSlug ||
+        o.code.toLowerCase() === candidateSlug
+    ) || null
+  );
 }
 
 export function App() {
@@ -84,9 +108,9 @@ export function App() {
   const [outfits, setOutfits] = useState<LehengaOutfit[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_OUTFITS);
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {
       // ignore
@@ -112,15 +136,46 @@ export function App() {
     }
   });
 
+  const [testimonials, setTestimonials] = useState<CustomerTestimonial[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_TESTIMONIALS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return INITIAL_TESTIMONIALS;
+  });
+
   const [activeView, setActiveViewState] = useState<'catalog' | 'admin'>(detectInitialView);
   const [selectedVibe, setSelectedVibe] = useState<VibeCategory>('All Vibes');
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'featured' | 'price-asc' | 'savings-desc'>('featured');
+  const [sortBy, setSortBy] = useState<'featured' | 'price-asc' | 'price-desc'>('featured');
   const [showWishlistOnly, setShowWishlistOnly] = useState(false);
+
+  const broadcastCatalogUpdate = (updatedOutfits: LehengaOutfit[]) => {
+    try {
+      localStorage.setItem(STORAGE_KEY_OUTFITS, JSON.stringify(updatedOutfits));
+    } catch {
+      // ignore
+    }
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const channel = new BroadcastChannel(CATALOG_SYNC_CHANNEL);
+        channel.postMessage({ type: 'CATALOG_UPDATED', outfits: updatedOutfits });
+        channel.close();
+      }
+    } catch {
+      // ignore
+    }
+  };
 
   // Sync URL path (/ vs /admin) with activeView
   const setActiveView = (view: 'catalog' | 'admin') => {
     setActiveViewState(view);
+    setInspectOutfit(null);
     try {
       const nextUrl = view === 'admin' ? '/admin' : '/';
       if (window.location.pathname !== nextUrl) {
@@ -131,16 +186,64 @@ export function App() {
     }
   };
 
+  const handleOpenOutfitPage = (outfit: LehengaOutfit) => {
+    setActiveViewState('catalog');
+    setInspectOutfit(outfit);
+    try {
+      const nextUrl = `/outfit/${encodeURIComponent(outfit.id)}`;
+      if (window.location.pathname !== nextUrl) {
+        window.history.pushState({}, '', nextUrl);
+      }
+    } catch {
+      // ignore in restricted iframe history environments
+    }
+  };
+
+  const handleCloseOutfitPage = () => {
+    setInspectOutfit(null);
+    try {
+      if (window.location.pathname !== '/') {
+        window.history.pushState({}, '', '/');
+      }
+    } catch {
+      // ignore in restricted iframe history environments
+    }
+  };
+
   useEffect(() => {
     const handlePopState = () => {
       setActiveViewState(detectInitialView());
+      setInspectOutfit(findOutfitFromLocation(outfits));
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+  }, [outfits]);
 
-  // Load site settings from backend API on mount
+  // Real-time (<1s) sync of outfits, site settings, and testimonials across tabs and server
   useEffect(() => {
+    const fetchLatestOutfits = () => {
+      fetch('/api/outfits')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (Array.isArray(data)) {
+            setOutfits((prev) => {
+              const prevJson = JSON.stringify(prev);
+              const nextJson = JSON.stringify(data);
+              if (prevJson !== nextJson) {
+                try {
+                  localStorage.setItem(STORAGE_KEY_OUTFITS, nextJson);
+                } catch {}
+                return data;
+              }
+              return prev;
+            });
+          }
+        })
+        .catch(() => {});
+    };
+
+    fetchLatestOutfits();
+
     fetch('/api/settings')
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
@@ -151,10 +254,103 @@ export function App() {
         }
       })
       .catch(() => {});
+
+    fetch('/api/testimonials')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setTestimonials(data);
+          localStorage.setItem(STORAGE_KEY_TESTIMONIALS, JSON.stringify(data));
+        }
+      })
+      .catch(() => {});
+
+    // Listen to BroadcastChannel for instant (<50ms) cross-tab updates
+    let channel: BroadcastChannel | null = null;
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        channel = new BroadcastChannel(CATALOG_SYNC_CHANNEL);
+        channel.onmessage = (event) => {
+          if (event.data?.type === 'CATALOG_UPDATED' && Array.isArray(event.data.outfits)) {
+            setOutfits(event.data.outfits);
+          }
+        };
+      }
+    } catch {
+      // ignore
+    }
+
+    // Listen to localStorage changes across tabs
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === STORAGE_KEY_OUTFITS && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            setOutfits(parsed);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    // Poll backend every 900ms so any published outfit is visible within 1 second
+    const pollInterval = window.setInterval(fetchLatestOutfits, 900);
+
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      window.clearInterval(pollInterval);
+      if (channel) channel.close();
+    };
   }, []);
 
-  // Modals
-  const [inspectOutfit, setInspectOutfit] = useState<LehengaOutfit | null>(null);
+  const handleDeleteTestimonial = async (id: string) => {
+    const updated = testimonials.filter((item) => item.id !== id);
+    setTestimonials(updated);
+    try {
+      localStorage.setItem(STORAGE_KEY_TESTIMONIALS, JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+    try {
+      await fetch(`/api/testimonials/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      });
+    } catch {
+      // fallback to localStorage
+    }
+  };
+
+  const handleAddTestimonial = async (newTestimonial: CustomerTestimonial) => {
+    const updated = [newTestimonial, ...testimonials];
+    setTestimonials(updated);
+    try {
+      localStorage.setItem(STORAGE_KEY_TESTIMONIALS, JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+    try {
+      const res = await fetch('/api/testimonials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newTestimonial),
+      });
+      if (res.ok) {
+        const saved = await res.json();
+        setTestimonials((prev) =>
+          prev.map((item) => (item.id === newTestimonial.id ? saved : item))
+        );
+      }
+    } catch {
+      // fallback to localStorage
+    }
+  };
+
+  // Modals & Full-Page Outfit Route
+  const [inspectOutfit, setInspectOutfit] = useState<LehengaOutfit | null>(() =>
+    findOutfitFromLocation(outfits)
+  );
   const [rentalOutfit, setRentalOutfit] = useState<LehengaOutfit | null>(null);
   const [shareOutfit, setShareOutfit] = useState<LehengaOutfit | null>(null);
   const [isTasksDrawerOpen, setIsTasksDrawerOpen] = useState(false);
@@ -192,17 +388,11 @@ export function App() {
     }
   }, [localTasks]);
 
-  // Deep link support (?outfit=LOL-IND-01)
+  // Deep link support (/outfit/lol-ind-01, /lol-ind-01, or ?outfit=LOL-IND-01)
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const outfitCode = params.get('outfit');
-    if (outfitCode) {
-      const found = outfits.find(
-        (o) => o.code.toLowerCase() === outfitCode.toLowerCase()
-      );
-      if (found) {
-        setInspectOutfit(found);
-      }
+    const found = findOutfitFromLocation(outfits);
+    if (found) {
+      setInspectOutfit(found);
     }
   }, [outfits]);
 
@@ -235,6 +425,16 @@ export function App() {
     );
   };
 
+  const dynamicVibeFilters = useMemo(() => {
+    const uniqueVibes = Array.from(
+      new Set(outfits.map((o) => o.vibeCategory?.trim()).filter(Boolean))
+    );
+    return [
+      { label: 'All Couture', value: 'All Vibes' },
+      ...uniqueVibes.map((vibe) => ({ label: vibe, value: vibe })),
+    ];
+  }, [outfits]);
+
   const filteredOutfits = useMemo(() => {
     return outfits
       .filter((item) => {
@@ -254,9 +454,7 @@ export function App() {
       })
       .sort((a, b) => {
         if (sortBy === 'price-asc') return a.pricePerDay - b.pricePerDay;
-        if (sortBy === 'savings-desc') {
-          return b.retailPrice - b.pricePerDay - (a.retailPrice - a.pricePerDay);
-        }
+        if (sortBy === 'price-desc') return b.pricePerDay - a.pricePerDay;
         return 0;
       });
   }, [outfits, selectedVibe, searchQuery, sortBy, showWishlistOnly, wishlist]);
@@ -384,11 +582,12 @@ export function App() {
   const pendingTasksCount = localTasks.filter((t) => t.status !== 'completed').length;
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#FAF8F5] text-[#1C1310]">
+    <div className="min-h-screen flex flex-col bg-gradient-to-b from-[#FFF5F8] via-white to-[#FFF0F5] text-[#4A1525]">
       {/* Sticky Minimalist Luxury Header */}
       <Navbar
         activeView={activeView}
         setActiveView={setActiveView}
+        isOutfitPage={Boolean(inspectOutfit)}
         siteSettings={siteSettings}
         selectedVibe={selectedVibe}
         onSelectVibe={setSelectedVibe}
@@ -407,13 +606,98 @@ export function App() {
             outfits={outfits}
             siteSettings={siteSettings}
             onUpdateSiteSettings={handleUpdateSiteSettings}
-            onAddOutfit={(newOutfit) => setOutfits((prev) => [newOutfit, ...prev])}
-            onUpdateOutfit={(updated) =>
-              setOutfits((prev) => prev.map((o) => (o.id === updated.id ? updated : o)))
-            }
-            onDeleteOutfit={(id) => setOutfits((prev) => prev.filter((o) => o.id !== id))}
-            onResetCatalog={() => setOutfits(INITIAL_OUTFITS)}
+            onAddOutfit={async (newOutfit) => {
+              setSelectedVibe('All Vibes');
+              setSearchQuery('');
+              setShowWishlistOnly(false);
+              setOutfits((prev) => {
+                const updated = [newOutfit, ...prev];
+                broadcastCatalogUpdate(updated);
+                return updated;
+              });
+              try {
+                const res = await fetch('/api/outfits', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'x-admin-password': 'sanjeevani',
+                  },
+                  body: JSON.stringify(newOutfit),
+                });
+                if (res.ok) {
+                  const saved = await res.json();
+                  setOutfits((prev) => {
+                    const synced = prev.map((o) => (o.id === newOutfit.id ? saved : o));
+                    broadcastCatalogUpdate(synced);
+                    return synced;
+                  });
+                }
+              } catch {
+                // fallback to local state
+              }
+            }}
+            onUpdateOutfit={async (updatedOutfit) => {
+              setOutfits((prev) => {
+                const updated = prev.map((o) =>
+                  o.id === updatedOutfit.id ? updatedOutfit : o
+                );
+                broadcastCatalogUpdate(updated);
+                return updated;
+              });
+              try {
+                const res = await fetch(`/api/outfits/${encodeURIComponent(updatedOutfit.id)}`, {
+                  method: 'PATCH',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'x-admin-password': 'sanjeevani',
+                  },
+                  body: JSON.stringify(updatedOutfit),
+                });
+                if (res.ok) {
+                  const saved = await res.json();
+                  setOutfits((prev) => {
+                    const synced = prev.map((o) => (o.id === updatedOutfit.id ? saved : o));
+                    broadcastCatalogUpdate(synced);
+                    return synced;
+                  });
+                }
+              } catch {
+                // fallback to local state
+              }
+            }}
+            onDeleteOutfit={async (id) => {
+              setOutfits((prev) => {
+                const updated = prev.filter((o) => o.id !== id);
+                broadcastCatalogUpdate(updated);
+                return updated;
+              });
+              try {
+                await fetch(`/api/outfits/${encodeURIComponent(id)}`, {
+                  method: 'DELETE',
+                  headers: {
+                    'x-admin-password': 'sanjeevani',
+                  },
+                });
+              } catch {
+                // fallback to local state
+              }
+            }}
+            onResetCatalog={() => {}}
             onBackToCatalog={() => setActiveView('catalog')}
+          />
+        </main>
+      ) : inspectOutfit ? (
+        <main className="flex-1">
+          <LookbookModal
+            outfit={inspectOutfit}
+            allOutfits={outfits}
+            wishlist={wishlist}
+            onClose={handleCloseOutfitPage}
+            onSelectOutfit={handleOpenOutfitPage}
+            onRent={(o) => setRentalOutfit(o)}
+            onShare={(o) => setShareOutfit(o)}
+            isWishlisted={wishlist.includes(inspectOutfit.id)}
+            onToggleWishlist={handleToggleWishlist}
           />
         </main>
       ) : (
@@ -424,7 +708,7 @@ export function App() {
             siteSettings={siteSettings}
             onRentClick={(outfit) => setRentalOutfit(outfit)}
             onShareClick={(outfit) => setShareOutfit(outfit)}
-            onInspectClick={(outfit) => setInspectOutfit(outfit)}
+            onInspectClick={handleOpenOutfitPage}
             onSelectVibe={(vibe) => setSelectedVibe(vibe)}
           />
 
@@ -435,23 +719,23 @@ export function App() {
           >
             {/* Section Title & Subtitle */}
             <div className="text-center max-w-2xl mx-auto mb-10 space-y-2">
-              <span className="text-[11px] uppercase tracking-[0.22em] text-[#E85D24] font-semibold block">
+              <span className="text-[11px] uppercase tracking-[0.22em] text-[#D81B60] font-semibold block">
                 Curated Bridal & Festive Edit
               </span>
-              <h2 className="font-editorial text-3xl sm:text-5xl font-semibold text-[#1C1310] tracking-tight">
+              <h2 className="font-editorial text-3xl sm:text-5xl font-semibold text-[#4A1525] tracking-tight">
                 The Lehenga Collection
               </h2>
-              <p className="text-xs sm:text-sm text-[#1C1310]/65">
+              <p className="text-xs sm:text-sm text-[#4A1525]/70">
                 Every piece is custom-fitted to your waist & blouse measurements, steam-sanitized,
                 and ready for pickup or delivery in Indore.
               </p>
             </div>
 
             {/* Clean Filter & Sort Bar */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-8 mb-8 border-b border-[#1C1310]/10">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-8 mb-8 border-b border-[#F8BBD0]/60">
               {/* Occasion Tabs */}
               <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 md:pb-0">
-                {VIBE_FILTERS.map((tab) => {
+                {dynamicVibeFilters.map((tab) => {
                   const active = selectedVibe === tab.value && !showWishlistOnly;
                   return (
                     <button
@@ -460,10 +744,10 @@ export function App() {
                         setShowWishlistOnly(false);
                         setSelectedVibe(tab.value);
                       }}
-                      className={`px-4 py-2 rounded-full text-xs font-medium whitespace-nowrap transition-all cursor-pointer ${
+                      className={`px-4 py-2 rounded-full text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
                         active
-                          ? 'bg-[#1C1310] text-white'
-                          : 'bg-white text-[#1C1310]/70 hover:text-[#1C1310] border border-[#1C1310]/10'
+                          ? 'bg-[#D81B60] text-white shadow-xs'
+                          : 'bg-white text-[#4A1525]/75 hover:text-[#D81B60] border border-[#F8BBD0]'
                       }`}
                     >
                       {tab.label}
@@ -474,10 +758,10 @@ export function App() {
                 {wishlist.length > 0 && (
                   <button
                     onClick={() => setShowWishlistOnly(!showWishlistOnly)}
-                    className={`px-4 py-2 rounded-full text-xs font-medium whitespace-nowrap inline-flex items-center gap-1.5 transition-all cursor-pointer ${
+                    className={`px-4 py-2 rounded-full text-xs font-semibold whitespace-nowrap inline-flex items-center gap-1.5 transition-all cursor-pointer ${
                       showWishlistOnly
-                        ? 'bg-[#E85D24] text-white'
-                        : 'bg-white text-[#1C1310]/75 border border-[#1C1310]/10'
+                        ? 'bg-[#D81B60] text-white'
+                        : 'bg-white text-[#D81B60] border border-[#F48FB1]'
                     }`}
                   >
                     <Heart className="w-3.5 h-3.5 fill-current" />
@@ -488,22 +772,22 @@ export function App() {
 
               {/* Right Sort Control */}
               <div className="flex items-center justify-between md:justify-end gap-3 shrink-0">
-                <span className="text-xs text-[#1C1310]/55">
-                  Showing <strong className="text-[#1C1310]">{filteredOutfits.length}</strong> designs
+                <span className="text-xs text-[#4A1525]/65">
+                  Showing <strong className="text-[#4A1525]">{filteredOutfits.length}</strong> designs
                 </span>
 
                 <div className="relative inline-flex items-center">
-                  <ArrowUpDown className="w-3.5 h-3.5 text-[#1C1310]/45 absolute left-3 pointer-events-none" />
+                  <ArrowUpDown className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 pointer-events-none" />
                   <select
                     value={sortBy}
                     onChange={(e) =>
-                      setSortBy(e.target.value as 'featured' | 'price-asc' | 'savings-desc')
+                      setSortBy(e.target.value as 'featured' | 'price-asc' | 'price-desc')
                     }
-                    className="pl-8 pr-4 py-2 rounded-full bg-white border border-[#1C1310]/12 text-xs font-medium text-[#1C1310] focus:outline-none focus:border-[#1C1310]/40 cursor-pointer"
+                    className="pl-8 pr-4 py-2 rounded-full bg-white border border-[#F8BBD0] text-xs font-medium text-[#4A1525] focus:outline-none focus:border-[#D81B60] cursor-pointer"
                   >
                     <option value="featured">Sort: Featured</option>
                     <option value="price-asc">Rent: Low to High</option>
-                    <option value="savings-desc">Biggest Retail Savings</option>
+                    <option value="price-desc">Rent: High to Low</option>
                   </select>
                 </div>
               </div>
@@ -511,12 +795,12 @@ export function App() {
 
             {/* Product Grid (3 Columns on Desktop — Full 3:4 Portrait Cards) */}
             {filteredOutfits.length === 0 ? (
-              <div className="text-center py-16 bg-white rounded-2xl border border-[#1C1310]/8 p-8">
-                <Sparkles className="w-8 h-8 text-[#E85D24] mx-auto mb-3" />
-                <h3 className="font-editorial text-2xl font-semibold text-[#1C1310]">
+              <div className="text-center py-16 bg-white rounded-2xl border border-[#F8BBD0]/60 p-8">
+                <Sparkles className="w-8 h-8 text-[#D81B60] mx-auto mb-3" />
+                <h3 className="font-editorial text-2xl font-semibold text-[#4A1525]">
                   No matching lehengas found
                 </h3>
-                <p className="text-xs text-[#1C1310]/60 mt-1 mb-5">
+                <p className="text-xs text-[#4A1525]/60 mt-1 mb-5">
                   Try clearing your search filter or exploring all occasion edits.
                 </p>
                 <button
@@ -525,7 +809,7 @@ export function App() {
                     setSearchQuery('');
                     setShowWishlistOnly(false);
                   }}
-                  className="px-6 py-2.5 rounded-full bg-[#1C1310] text-white text-xs uppercase tracking-wider font-semibold hover:bg-[#E85D24] transition-colors cursor-pointer"
+                  className="px-6 py-2.5 rounded-full bg-[#D81B60] text-white text-xs uppercase tracking-wider font-semibold hover:bg-[#AD1457] transition-colors cursor-pointer"
                 >
                   Reset Filters
                 </button>
@@ -538,7 +822,7 @@ export function App() {
                     outfit={outfit}
                     onRent={(o) => setRentalOutfit(o)}
                     onShare={(o) => setShareOutfit(o)}
-                    onInspect={(o) => setInspectOutfit(o)}
+                    onInspect={handleOpenOutfitPage}
                     isWishlisted={wishlist.includes(outfit.id)}
                     onToggleWishlist={handleToggleWishlist}
                   />
@@ -548,73 +832,83 @@ export function App() {
           </section>
 
           {/* How Our 24-Hour Couture Lease Works */}
-          <section className="bg-white border-y border-[#1C1310]/10 py-16 sm:py-20">
+          <section className="bg-[#FFF0F5] border-y border-[#F8BBD0]/60 py-16 sm:py-20">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
               <div className="text-center max-w-xl mx-auto mb-12">
-                <span className="text-[11px] uppercase tracking-[0.22em] text-[#E85D24] font-semibold block">
-                  Effortless Luxury
+                <span className="text-[11px] uppercase tracking-[0.22em] text-[#D81B60] font-semibold block">
+                  RENT, FLEX, RETURN
                 </span>
-                <h2 className="font-editorial text-3xl sm:text-4xl font-semibold text-[#1C1310] mt-1">
-                  How Lehenga On Lease Works
+                <h2 className="font-editorial text-3xl sm:text-4xl font-semibold text-[#4A1525] mt-1">
+                  How to secure the drip in 3 steps
                 </h2>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                <div className="p-6 rounded-2xl bg-[#FAF8F5] border border-[#1C1310]/8 space-y-3">
-                  <div className="w-10 h-10 rounded-full bg-[#1C1310] text-white flex items-center justify-center">
-                    <Ruler className="w-4 h-4 text-[#E85D24]" />
+                <div className="p-6 rounded-2xl bg-white border border-[#F8BBD0]/60 shadow-2xs space-y-3">
+                  <div className="w-10 h-10 rounded-full bg-[#FFF0F5] border border-[#F8BBD0] flex items-center justify-center">
+                    <Ruler className="w-4 h-4 text-[#D81B60]" />
                   </div>
-                  <span className="text-[10px] font-mono-num uppercase tracking-widest text-[#1C1310]/50 font-semibold block">
+                  <span className="text-[10px] font-mono-num uppercase tracking-widest text-[#D81B60] font-semibold block">
                     Step 01
                   </span>
-                  <h3 className="font-editorial text-2xl font-semibold text-[#1C1310]">
-                    Select & Custom Fit
+                  <h3 className="font-editorial text-2xl font-semibold text-[#4A1525]">
+                    Lock Your Look & Tailor It
                   </h3>
-                  <p className="text-xs text-[#1C1310]/70 leading-relaxed">
-                    Pick your favourite lehenga online or book a private fitting at our Indore
-                    studio. Our master tailors adjust the waist and blouse to your exact size.
+                  <p className="text-xs text-[#4A1525]/75 leading-relaxed">
+                    Pick your dream fit online or slide into our Indore studio. Our master tailors
+                    will alter the waist and blouse so it hugs you perfectly. No loose-fit disasters
+                    here, bestie.
                   </p>
                 </div>
 
-                <div className="p-6 rounded-2xl bg-[#FAF8F5] border border-[#1C1310]/8 space-y-3">
-                  <div className="w-10 h-10 rounded-full bg-[#1C1310] text-white flex items-center justify-center">
-                    <ShieldCheck className="w-4 h-4 text-[#E85D24]" />
+                <div className="p-6 rounded-2xl bg-white border border-[#F8BBD0]/60 shadow-2xs space-y-3">
+                  <div className="w-10 h-10 rounded-full bg-[#FFF0F5] border border-[#F8BBD0] flex items-center justify-center">
+                    <ShieldCheck className="w-4 h-4 text-[#D81B60]" />
                   </div>
-                  <span className="text-[10px] font-mono-num uppercase tracking-widest text-[#1C1310]/50 font-semibold block">
+                  <span className="text-[10px] font-mono-num uppercase tracking-widest text-[#D81B60] font-semibold block">
                     Step 02
                   </span>
-                  <h3 className="font-editorial text-2xl font-semibold text-[#1C1310]">
-                    Slay The Function
+                  <h3 className="font-editorial text-2xl font-semibold text-[#4A1525]">
+                    Slay The Function (Main Character Energy)
                   </h3>
-                  <p className="text-xs text-[#1C1310]/70 leading-relaxed">
-                    Receive your steam-sanitized, crisp-pressed lehenga in a luxury garment bag.
-                    Own the spotlight at Sangeet, Haldi, or Reception for 95% less than retail.
+                  <p className="text-xs text-[#4A1525]/75 leading-relaxed">
+                    Pick up your freshly steam-sanitized, perfectly pressed outfit in a luxury bag.
+                    Step into the venue, break the internet, and drop jaws for 95% less than retail
+                    price.
                   </p>
                 </div>
 
-                <div className="p-6 rounded-2xl bg-[#FAF8F5] border border-[#1C1310]/8 space-y-3">
-                  <div className="w-10 h-10 rounded-full bg-[#1C1310] text-white flex items-center justify-center">
-                    <Clock className="w-4 h-4 text-[#E85D24]" />
+                <div className="p-6 rounded-2xl bg-white border border-[#F8BBD0]/60 shadow-2xs space-y-3">
+                  <div className="w-10 h-10 rounded-full bg-[#FFF0F5] border border-[#F8BBD0] flex items-center justify-center">
+                    <Clock className="w-4 h-4 text-[#D81B60]" />
                   </div>
-                  <span className="text-[10px] font-mono-num uppercase tracking-widest text-[#1C1310]/50 font-semibold block">
+                  <span className="text-[10px] font-mono-num uppercase tracking-widest text-[#D81B60] font-semibold block">
                     Step 03
                   </span>
-                  <h3 className="font-editorial text-2xl font-semibold text-[#1C1310]">
-                    24-Hr Next-Day Return
+                  <h3 className="font-editorial text-2xl font-semibold text-[#4A1525]">
+                    No Gatekeeping: Return Next Day
                   </h3>
-                  <p className="text-xs text-[#1C1310]/70 leading-relaxed">
-                    Simply hand it back by 6:00 PM the day after your event. We handle all
-                    professional dry-cleaning and zardosi care—zero stress for you.
+                  <p className="text-xs text-[#4A1525]/75 leading-relaxed">
+                    Bring it back by 12:00 PM the next day so another Indori kudi can slay her
+                    weekend. We handle all the heavy dry-cleaning and zardosi care—zero stress for
+                    you!
                   </p>
                 </div>
               </div>
             </div>
           </section>
+
+          {/* Indore Customer Testimonial Slider & Photo Review Submission */}
+          <TestimonialSection
+            testimonials={testimonials}
+            onAddTestimonial={handleAddTestimonial}
+            onDeleteTestimonial={handleDeleteTestimonial}
+          />
         </main>
       )}
 
-      {/* Minimalist Luxury Footer with Dynamic Bottom Logo */}
-      <footer className="bg-[#1C1310] text-[#FAF8F5] py-14 border-t border-white/10">
+      {/* Light Pink & White Luxury Footer with Dynamic Bottom Logo */}
+      <footer className="bg-[#FCE4EC] text-[#4A1525] py-14 border-t border-[#F8BBD0]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 md:grid-cols-12 gap-10 items-start">
           <div className="md:col-span-5 space-y-4">
             {siteSettings.bottomLogoUrl ? (
@@ -622,11 +916,11 @@ export function App() {
                 src={siteSettings.bottomLogoUrl}
                 alt={siteSettings.brandTitle || 'LOL By Sanjeevani'}
                 style={{ height: `${siteSettings.bottomLogoHeight || 88}px` }}
-                className="w-auto object-contain bg-white/95 rounded-xl p-2 transition-all duration-200"
+                className="w-auto object-contain bg-white rounded-xl p-2 border border-[#F8BBD0] transition-all duration-200"
               />
             ) : (
               <div
-                className="inline-block bg-white/95 rounded-2xl px-4 py-2.5 origin-left transition-transform duration-200"
+                className="inline-block bg-white rounded-2xl px-4 py-2.5 border border-[#F8BBD0] origin-left transition-transform duration-200"
                 style={{
                   transform: `scale(${(siteSettings.bottomLogoHeight || 88) / 80})`,
                 }}
@@ -634,48 +928,42 @@ export function App() {
                 <LolBrandLogo variant="navbar" />
               </div>
             )}
-            <p className="text-xs text-[#FAF8F5]/70 max-w-sm leading-relaxed">
+            <p className="text-xs text-[#4A1525]/75 max-w-sm leading-relaxed">
               {siteSettings.footerDescription}
             </p>
-            <div className="flex flex-wrap items-center gap-4 text-xs text-[#FAF8F5]/80 pt-1">
+            <div className="flex flex-wrap items-center gap-4 text-xs text-[#4A1525]/85 pt-1">
               <span className="inline-flex items-center gap-1.5">
-                <MapPin className="w-3.5 h-3.5 text-[#E85D24]" />
+                <MapPin className="w-3.5 h-3.5 text-[#D81B60]" />
                 {siteSettings.studioLocation}
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-[#E85D24]" />
-                By Appointment & Instant Online Booking
               </span>
             </div>
           </div>
 
           <div className="md:col-span-4 space-y-2.5">
-            <h4 className="text-[11px] uppercase tracking-[0.2em] text-[#E85D24] font-semibold">
+            <h4 className="text-[11px] uppercase tracking-[0.2em] text-[#D81B60] font-semibold">
               Curated Collections
             </h4>
-            <ul className="space-y-2 text-xs text-[#FAF8F5]/75">
-              {VIBE_FILTERS.map((item) => (
-                <li key={item.value}>
-                  <button
-                    onClick={() => {
-                      setActiveView('catalog');
-                      setSelectedVibe(item.value);
-                      document.getElementById('catalog-grid')?.scrollIntoView({ behavior: 'smooth' });
-                    }}
-                    className="hover:text-white transition-colors cursor-pointer"
-                  >
-                    {item.label}
-                  </button>
-                </li>
-              ))}
+            <ul className="space-y-2 text-xs text-[#4A1525]/80">
+              <li>
+                <button
+                  onClick={() => {
+                    setActiveView('catalog');
+                    setSelectedVibe('All Vibes');
+                    document.getElementById('catalog-grid')?.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                  className="hover:text-[#D81B60] transition-colors cursor-pointer"
+                >
+                  All Couture
+                </button>
+              </li>
             </ul>
           </div>
 
           <div className="md:col-span-3 space-y-3">
-            <h4 className="text-[11px] uppercase tracking-[0.2em] text-[#E85D24] font-semibold">
+            <h4 className="text-[11px] uppercase tracking-[0.2em] text-[#D81B60] font-semibold">
               Book A Fitting
             </h4>
-            <p className="text-xs text-[#FAF8F5]/70 leading-relaxed">
+            <p className="text-xs text-[#4A1525]/75 leading-relaxed">
               Need help styling your Sangeet or Bridal look? Chat directly with Sanjeevani’s studio
               team on WhatsApp.
             </p>
@@ -683,7 +971,7 @@ export function App() {
               href={`https://wa.me/${siteSettings.whatsappNumber || '919826000000'}?text=Hi%20LOL%20By%20Sanjeevani!%20I%20would%20like%20to%20book%20a%20lehenga%20trial%20in%20Indore.`}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-5 py-3 rounded-full bg-[#E85D24] text-white text-xs uppercase tracking-wider font-semibold hover:bg-[#d44d17] transition-colors"
+              className="inline-flex items-center gap-2 px-5 py-3 rounded-full bg-[#D81B60] text-white text-xs uppercase tracking-wider font-semibold hover:bg-[#AD1457] transition-colors shadow-sm"
             >
               <PhoneCall className="w-3.5 h-3.5" />
               <span>WhatsApp Concierge</span>
@@ -691,7 +979,7 @@ export function App() {
           </div>
         </div>
 
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-10 pt-6 border-t border-white/10 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-[#FAF8F5]/50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-10 pt-6 border-t border-[#F8BBD0] flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-[#4A1525]/65">
           <p>© {new Date().getFullYear()} LOL — Lehenga On Lease By Sanjeevani. All rights reserved.</p>
           <div className="flex items-center gap-4">
             <span>24-Hour Next-Day Return • Steam-Sanitized Designer Wear • Indore</span>
@@ -700,7 +988,7 @@ export function App() {
                 setActiveView('admin');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
-              className="inline-flex items-center gap-1 text-[#FAF8F5]/40 hover:text-[#F5A623] transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 text-[#4A1525]/55 hover:text-[#D81B60] transition-colors cursor-pointer"
               title="Open Backend CMS (/admin)"
             >
               <Lock className="w-3 h-3" />
@@ -709,16 +997,6 @@ export function App() {
           </div>
         </div>
       </footer>
-
-      {/* Split-Screen Luxury Lookbook Modal */}
-      <LookbookModal
-        outfit={inspectOutfit}
-        onClose={() => setInspectOutfit(null)}
-        onRent={(o) => setRentalOutfit(o)}
-        onShare={(o) => setShareOutfit(o)}
-        isWishlisted={inspectOutfit ? wishlist.includes(inspectOutfit.id) : false}
-        onToggleWishlist={handleToggleWishlist}
-      />
 
       {/* Instant Reservation & Next-Day Return Modal */}
       <RentalModal

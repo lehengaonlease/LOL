@@ -12,14 +12,11 @@ export const ShareModal: React.FC<ShareModalProps> = ({ outfit, onClose }) => {
 
   if (!outfit) return null;
 
-  const shareUrl = `${window.location.origin}/?outfit=${encodeURIComponent(outfit.code)}`;
-  const savings = outfit.retailPrice - outfit.pricePerDay;
+  const shareUrl = `${window.location.origin}/outfit/${encodeURIComponent(outfit.id)}`;
 
   const shareText = `${outfit.title} (${outfit.code}) — Rent for ₹${outfit.pricePerDay.toLocaleString(
     'en-IN'
-  )}/day instead of buying for ₹${outfit.retailPrice.toLocaleString(
-    'en-IN'
-  )}! ${outfit.ogHumorTagline}`;
+  )}/day! ${outfit.ogHumorTagline}`;
 
   const handleCopy = async () => {
     try {
@@ -50,7 +47,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ outfit, onClose }) => {
   const whatsappShareUrl = `https://wa.me/?text=${encodeURIComponent(
     `*${outfit.title}* (${outfit.code})\n${outfit.ogHumorTagline}\n\nRent in Indore for *₹${outfit.pricePerDay.toLocaleString(
       'en-IN'
-    )}/day* (Save ₹${savings.toLocaleString('en-IN')} off retail!)\n${shareUrl}`
+    )}/day*\n${shareUrl}`
   )}`;
 
   return (
@@ -104,9 +101,6 @@ export const ShareModal: React.FC<ShareModalProps> = ({ outfit, onClose }) => {
               <div className="mt-2.5 flex items-baseline gap-2">
                 <span className="text-sm font-semibold text-[#1C1310]">
                   ₹{outfit.pricePerDay.toLocaleString('en-IN')}/day
-                </span>
-                <span className="text-xs text-[#1C1310]/45 line-through">
-                  MRP ₹{outfit.retailPrice.toLocaleString('en-IN')}
                 </span>
               </div>
             </div>

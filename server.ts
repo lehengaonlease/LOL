@@ -4,8 +4,14 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { INITIAL_OUTFITS } from './src/data/initialOutfits.ts';
+import { INITIAL_TESTIMONIALS } from './src/data/initialTestimonials.ts';
 import { DEFAULT_SITE_SETTINGS } from './src/types.ts';
-import type { LehengaOutfit, RentalBooking, SiteSettings } from './src/types.ts';
+import type {
+  LehengaOutfit,
+  RentalBooking,
+  SiteSettings,
+  CustomerTestimonial,
+} from './src/types.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,6 +21,7 @@ const UPLOADS_DIR = path.join(__dirname, 'public', 'uploads');
 const CATALOG_FILE = path.join(DATA_DIR, 'catalog.json');
 const BOOKINGS_FILE = path.join(DATA_DIR, 'bookings.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'site-settings.json');
+const TESTIMONIALS_FILE = path.join(DATA_DIR, 'testimonials.json');
 
 // Ensure directories exist
 if (!fs.existsSync(DATA_DIR)) {
@@ -44,12 +51,32 @@ function saveSiteSettings(settings: SiteSettings): SiteSettings {
   return merged;
 }
 
+function loadTestimonials(): CustomerTestimonial[] {
+  try {
+    if (fs.existsSync(TESTIMONIALS_FILE)) {
+      const raw = fs.readFileSync(TESTIMONIALS_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('Error reading testimonials.json:', err);
+  }
+  fs.writeFileSync(TESTIMONIALS_FILE, JSON.stringify(INITIAL_TESTIMONIALS, null, 2), 'utf-8');
+  return [...INITIAL_TESTIMONIALS];
+}
+
+function saveTestimonials(list: CustomerTestimonial[]) {
+  fs.writeFileSync(TESTIMONIALS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+}
+
 function loadOutfits(): LehengaOutfit[] {
   try {
     if (fs.existsSync(CATALOG_FILE)) {
       const raw = fs.readFileSync(CATALOG_FILE, 'utf-8');
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
         return parsed;
       }
     }
@@ -148,7 +175,7 @@ function injectDynamicOgTags(html: string, outfit: LehengaOutfit, baseUrl: strin
   const fullMediaUrl = outfit.mediaUrl.startsWith('http')
     ? outfit.mediaUrl
     : `${baseUrl}${outfit.mediaUrl.startsWith('/') ? '' : '/'}${outfit.mediaUrl}`;
-  const shareUrl = `${baseUrl}/?outfit=${encodeURIComponent(outfit.id)}`;
+  const shareUrl = `${baseUrl}/outfit/${encodeURIComponent(outfit.id)}`;
 
   return html
     .replace(/<title>.*?<\/title>/i, `<title>${escapeHtml(ogTitle)}</title>`)
@@ -290,6 +317,52 @@ async function startServer() {
     res.json(outfits);
   });
 
+  // API: Get & Create Customer Testimonials (Indore Client Reviews + 1 Photo)
+  app.get('/api/testimonials', (_req, res) => {
+    res.json(loadTestimonials());
+  });
+
+  app.post('/api/testimonials', (req, res) => {
+    try {
+      const { customerName, indoreLocation, rating, quote, photoUrl, outfitCode } = req.body;
+      if (!customerName || !quote || !photoUrl) {
+        res.status(400).json({ error: 'Name, quote, and 1 photo are required.' });
+        return;
+      }
+      let savedPhotoUrl = String(photoUrl);
+      if (savedPhotoUrl.startsWith('data:')) {
+        savedPhotoUrl = saveBase64MediaToPublic(savedPhotoUrl, 'client-review');
+      }
+      const newReview: CustomerTestimonial = {
+        id: `test-${Date.now()}`,
+        customerName: String(customerName).trim(),
+        indoreLocation: String(indoreLocation || 'Indore • Verified LOL Client').trim(),
+        rating: Math.max(1, Math.min(5, Number(rating) || 5)),
+        quote: String(quote).trim(),
+        photoUrl: savedPhotoUrl,
+        outfitCode: outfitCode ? String(outfitCode).trim() : undefined,
+        createdAt: new Date().toISOString(),
+      };
+      const current = loadTestimonials();
+      const updated = [newReview, ...current];
+      saveTestimonials(updated);
+      res.status(201).json(newReview);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to save review' });
+    }
+  });
+
+  app.delete('/api/testimonials/:id', (req, res) => {
+    try {
+      const current = loadTestimonials();
+      const filtered = current.filter((item) => item.id !== req.params.id);
+      saveTestimonials(filtered);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to delete review' });
+    }
+  });
+
   // API: Get single outfit OG preview data
   app.get('/api/og-preview/:id', (req, res) => {
     const outfits = loadOutfits();
@@ -318,18 +391,19 @@ async function startServer() {
     const adminPassword = req.headers['x-admin-password'] as string | undefined;
     const {
       password,
+      id: incomingId,
       title,
       code,
       pricePerDay,
-      retailPrice,
       description,
       ogHumorTagline,
       mediaDataUrl,
       mediaUrl,
       mediaType,
+      images,
+      videoUrl,
       vibeCategory,
       sizes,
-      indoreHotspot,
     } = req.body;
 
     if (!isValidAdminPassword(adminPassword || password)) {
@@ -343,21 +417,46 @@ async function startServer() {
     }
 
     const outfits = loadOutfits();
-    let finalMediaUrl = mediaUrl || '/images/lehenga-orange-zardosi.jpg';
+
+    const savedImages: string[] = Array.isArray(images)
+      ? images
+          .map((img: unknown) => (typeof img === 'string' ? img.trim() : ''))
+          .filter(Boolean)
+          .slice(0, 4)
+          .map((img) =>
+            img.startsWith('data:') ? saveBase64MediaToPublic(img, 'lehenga-img') : img
+          )
+      : [];
+
+    let savedVideoUrl = typeof videoUrl === 'string' ? videoUrl.trim() : '';
+    if (savedVideoUrl && savedVideoUrl.startsWith('data:')) {
+      savedVideoUrl = saveBase64MediaToPublic(savedVideoUrl, 'lehenga-vid');
+    }
+
+    let finalMediaUrl =
+      savedImages[0] || mediaUrl || savedVideoUrl || '/images/lehenga-orange-zardosi.jpg';
     if (mediaDataUrl && typeof mediaDataUrl === 'string' && mediaDataUrl.startsWith('data:')) {
       finalMediaUrl = saveBase64MediaToPublic(mediaDataUrl, 'lehenga');
     }
 
+    if (savedImages.length === 0 && finalMediaUrl && mediaType !== 'video') {
+      savedImages.push(finalMediaUrl);
+    }
+
     const generatedNumber = String(outfits.length + 1).padStart(2, '0');
     const cleanCode = (code || `LOL-IND-${generatedNumber}`).toUpperCase().trim();
-    const id = cleanCode.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const baseId =
+      typeof incomingId === 'string' && incomingId.trim()
+        ? incomingId.trim()
+        : cleanCode.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
     const newOutfit: LehengaOutfit = {
-      id: outfits.some((o) => o.id === id) ? `${id}-${Date.now().toString().slice(-4)}` : id,
+      id: outfits.some((o) => o.id === baseId)
+        ? `${baseId}-${Date.now().toString().slice(-4)}`
+        : baseId,
       code: cleanCode,
       title: String(title).trim(),
       pricePerDay: Number(pricePerDay),
-      retailPrice: Number(retailPrice) || Number(pricePerDay) * 20,
       description:
         String(description || '').trim() ||
         'Zero commitment, 100% main character energy. Wear it once for the gram and hand it back tomorrow.',
@@ -365,10 +464,16 @@ async function startServer() {
         String(ogHumorTagline || '').trim() ||
         `Why buy when you can slay for ₹${Number(pricePerDay).toLocaleString('en-IN')}/day? Rent it, flex it, return it! 🔥`,
       mediaUrl: finalMediaUrl,
-      mediaType: mediaType === 'video' ? 'video' : 'image',
-      vibeCategory: vibeCategory || 'Sangeet Main Character',
+      mediaType:
+        savedImages.length > 0
+          ? 'image'
+          : savedVideoUrl || mediaType === 'video'
+          ? 'video'
+          : 'image',
+      images: savedImages,
+      videoUrl: savedVideoUrl || undefined,
+      vibeCategory: String(vibeCategory || '').trim() || 'Sangeet Main Character',
       sizes: Array.isArray(sizes) && sizes.length > 0 ? sizes : ['XS-S', 'M-L (Adjustable)'],
-      indoreHotspot: String(indoreHotspot || '').trim() || 'Indore Sangeet & Wedding Certified',
       available: true,
       createdAt: new Date().toISOString(),
     };
@@ -393,9 +498,26 @@ async function startServer() {
       return;
     }
 
+    const incoming = { ...req.body };
+    delete incoming.retailPrice;
+    delete incoming.indoreHotspot;
+
+    if (Array.isArray(incoming.images)) {
+      incoming.images = incoming.images
+        .map((img: unknown) => (typeof img === 'string' ? img.trim() : ''))
+        .filter(Boolean)
+        .slice(0, 4)
+        .map((img: string) =>
+          img.startsWith('data:') ? saveBase64MediaToPublic(img, 'lehenga-img') : img
+        );
+    }
+    if (typeof incoming.videoUrl === 'string' && incoming.videoUrl.startsWith('data:')) {
+      incoming.videoUrl = saveBase64MediaToPublic(incoming.videoUrl, 'lehenga-vid');
+    }
+
     outfits[index] = {
       ...outfits[index],
-      ...req.body,
+      ...incoming,
       id: outfits[index].id,
     };
     saveOutfits(outfits);
@@ -485,10 +607,20 @@ async function startServer() {
         let template = fs.readFileSync(path.resolve(__dirname, 'index.html'), 'utf-8');
         template = await vite.transformIndexHtml(url, template);
 
-        // Check if a specific outfit is requested via ?outfit=<id> or /share/<id>
-        const outfitQueryId =
-          (req.query.outfit as string) ||
-          (req.path.startsWith('/share/') ? req.path.replace('/share/', '') : '');
+        // Check if a specific outfit is requested via /outfit/<id>, /share/<id>, /<id>, or ?outfit=<id>
+        const rawPath = decodeURIComponent(req.path || '').replace(/^\/+|\/+$/g, '');
+        let outfitQueryId = (req.query.outfit as string) || '';
+        if (!outfitQueryId) {
+          if (rawPath.toLowerCase().startsWith('outfit/')) {
+            outfitQueryId = rawPath.slice('outfit/'.length);
+          } else if (rawPath.toLowerCase().startsWith('lehenga/')) {
+            outfitQueryId = rawPath.slice('lehenga/'.length);
+          } else if (rawPath.toLowerCase().startsWith('share/')) {
+            outfitQueryId = rawPath.slice('share/'.length);
+          } else if (rawPath && rawPath.toLowerCase() !== 'admin') {
+            outfitQueryId = rawPath;
+          }
+        }
 
         if (outfitQueryId) {
           const outfits = loadOutfits();
@@ -522,9 +654,19 @@ async function startServer() {
       const indexPath = path.join(distPath, 'index.html');
       let html = fs.readFileSync(indexPath, 'utf-8');
 
-      const outfitQueryId =
-        (req.query.outfit as string) ||
-        (req.path.startsWith('/share/') ? req.path.replace('/share/', '') : '');
+      const rawPath = decodeURIComponent(req.path || '').replace(/^\/+|\/+$/g, '');
+      let outfitQueryId = (req.query.outfit as string) || '';
+      if (!outfitQueryId) {
+        if (rawPath.toLowerCase().startsWith('outfit/')) {
+          outfitQueryId = rawPath.slice('outfit/'.length);
+        } else if (rawPath.toLowerCase().startsWith('lehenga/')) {
+          outfitQueryId = rawPath.slice('lehenga/'.length);
+        } else if (rawPath.toLowerCase().startsWith('share/')) {
+          outfitQueryId = rawPath.slice('share/'.length);
+        } else if (rawPath && rawPath.toLowerCase() !== 'admin') {
+          outfitQueryId = rawPath;
+        }
+      }
 
       if (outfitQueryId) {
         const outfits = loadOutfits();
