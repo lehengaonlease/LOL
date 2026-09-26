@@ -1,0 +1,6 @@
+{
+  "name": "LOL: Lehenga On Lease By Sanjeevani",
+  "description": "Indore's ultra-modern Gen Z lehenga rental vault. Stop buying outfits you'll only wear once for Instagram. Rent it, flex it, return it.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
