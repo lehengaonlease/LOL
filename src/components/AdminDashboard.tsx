@@ -1,20 +1,28 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   Plus,
   Trash2,
   Upload,
-  Tag,
-  IndianRupee,
   CheckCircle2,
   ArrowLeft,
   Film,
   Image as ImageIcon,
   Palette,
   ShoppingBag,
-  Edit3,
   ExternalLink,
   Save,
   X,
+  Eye,
+  ArrowUpDown,
+  Sparkles,
+  Ruler,
+  ShieldCheck,
+  Clock,
+  Play,
+  ZoomIn,
+  ZoomOut,
+  ChevronRight,
+  Search,
 } from 'lucide-react';
 import { LehengaOutfit, SiteSettings, DEFAULT_SITE_SETTINGS } from '../types';
 import { LolBrandLogo } from './LolBrandLogo';
@@ -30,29 +38,718 @@ interface AdminDashboardProps {
   onBackToCatalog: () => void;
 }
 
-const HUMOR_TEMPLATES = [
-  {
-    label: 'Bua-Ji Distractor',
-    description:
-      "So blindingly gorgeous that relatives will forget to ask 'Beta, aage kya plan hai?' Pure raw silk with antique gold zardosi. Zero storage trauma, 100% Instagram feed dominance.",
-    ogTagline:
-      'Why spend a fortune when you can break Instagram for ₹2,499/day? Rent it, flex it, return it tomorrow. 🔥',
-  },
-  {
-    label: 'Ex’s Cousin’s Shaadi',
-    description:
-      'Rich couture silhouette paired with hand-cut mirror work and a sheer organza drape. Designed specifically for walking past people you pretend not to know in slow motion.',
-    ogTagline:
-      'Look like old money on a Chappan Dukan budget. Designer couture for ₹2,499/day—no commitment, just vibes. ✨',
-  },
-  {
-    label: 'Both Hands Free For Chaat',
-    description:
-      'Featherlight can-can flare with a pre-draped cape dupatta. No heavy safety-pin battles required—keeps both hands free for mocktails and dancing.',
-    ogTagline:
-      'Built for 4K slow-mo twirls and zero credit card regret. Lease today, return tomorrow! 💃',
-  },
-];
+// Helper to upload a file to /uploads on backend
+async function uploadFileToBackend(file: File, prefix: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      if (typeof reader.result !== 'string') {
+        reject(new Error('Failed to read file'));
+        return;
+      }
+      try {
+        if (prefix === 'hero-banner-video') {
+          const res = await fetch('/api/banner-video', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ videoDataUrl: reader.result }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            resolve(data.url);
+            return;
+          }
+        } else {
+          const res = await fetch('/api/upload-media', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dataUrl: reader.result, prefix }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            resolve(data.url);
+            return;
+          }
+        }
+        resolve(reader.result);
+      } catch {
+        resolve(reader.result);
+      }
+    };
+    reader.onerror = () => reject(new Error('File read error'));
+    reader.readAsDataURL(file);
+  });
+}
+
+interface EditableGridCardProps {
+  outfit: LehengaOutfit;
+  onSaveOutfit: (updated: LehengaOutfit, msg?: string) => Promise<void>;
+  onDeleteOutfit: (id: string) => Promise<void> | void;
+  onOpenDetailEditor: (outfit: LehengaOutfit) => void;
+}
+
+const EditableGridCard: React.FC<EditableGridCardProps> = ({
+  outfit,
+  onSaveOutfit,
+  onDeleteOutfit,
+  onOpenDetailEditor,
+}) => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoFileInputRef = useRef<HTMLInputElement | null>(null);
+  const photoFileInputRefs = [
+    useRef<HTMLInputElement | null>(null),
+    useRef<HTMLInputElement | null>(null),
+    useRef<HTMLInputElement | null>(null),
+    useRef<HTMLInputElement | null>(null),
+  ];
+  const batchPhotosInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [code, setCode] = useState(outfit.code);
+  const [title, setTitle] = useState(outfit.title);
+  const [vibeCategory, setVibeCategory] = useState(outfit.vibeCategory);
+  const [description, setDescription] = useState(outfit.description);
+  const [pricePerDay, setPricePerDay] = useState(String(outfit.pricePerDay));
+  const [sizesText, setSizesText] = useState(outfit.sizes.join(', '));
+  const [available, setAvailable] = useState(outfit.available);
+  const [videoUrl, setVideoUrl] = useState(
+    outfit.videoUrl || (outfit.mediaType === 'video' ? outfit.mediaUrl : '')
+  );
+  const [imageSlots, setImageSlots] = useState<[string, string, string, string]>(() => {
+    const imgs =
+      Array.isArray(outfit.images) && outfit.images.length > 0
+        ? outfit.images
+        : outfit.mediaType === 'image' && outfit.mediaUrl
+        ? [outfit.mediaUrl]
+        : [];
+    return [imgs[0] || '', imgs[1] || '', imgs[2] || '', imgs[3] || ''];
+  });
+
+  const [showMediaTray, setShowMediaTray] = useState(false);
+  const [uploadingSlot, setUploadingSlot] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Sync local state when outfit prop updates from parent
+  useEffect(() => {
+    setCode(outfit.code);
+    setTitle(outfit.title);
+    setVibeCategory(outfit.vibeCategory);
+    setDescription(outfit.description);
+    setPricePerDay(String(outfit.pricePerDay));
+    setSizesText(outfit.sizes.join(', '));
+    setAvailable(outfit.available);
+    setVideoUrl(outfit.videoUrl || (outfit.mediaType === 'video' ? outfit.mediaUrl : ''));
+    const imgs =
+      Array.isArray(outfit.images) && outfit.images.length > 0
+        ? outfit.images
+        : outfit.mediaType === 'image' && outfit.mediaUrl
+        ? [outfit.mediaUrl]
+        : [];
+    setImageSlots([imgs[0] || '', imgs[1] || '', imgs[2] || '', imgs[3] || '']);
+  }, [outfit]);
+
+  // Build front-end identical media items (Video is index 0 when present; otherwise Photo 1 is index 0)
+  const mediaItems = useMemo(() => {
+    const items: { type: 'image' | 'video'; url: string; label: string }[] = [];
+    const cleanVid = videoUrl.trim();
+    if (cleanVid) {
+      items.push({
+        type: 'video',
+        url: cleanVid,
+        label: 'Video',
+      });
+    }
+    const validImgs = imageSlots.map((s) => s.trim()).filter(Boolean);
+    validImgs.forEach((url, idx) => {
+      items.push({
+        type: 'image',
+        url,
+        label: `Photo ${idx + 1}`,
+      });
+    });
+
+    if (items.length === 0) {
+      const fallbackPhoto =
+        (outfit.mediaType === 'image' && outfit.mediaUrl ? outfit.mediaUrl : '') ||
+        '/images/lehenga-orange-zardosi.jpg';
+      items.push({
+        type: 'image',
+        url: fallbackPhoto,
+        label: 'Photo 1',
+      });
+    }
+    return items;
+  }, [videoUrl, imageSlots, outfit.mediaType, outfit.mediaUrl]);
+
+  const [activeMediaIndex, setActiveMediaIndex] = useState(0);
+
+  useEffect(() => {
+    setActiveMediaIndex(0);
+  }, [videoUrl, imageSlots[0]]);
+
+  const currentMedia = mediaItems[activeMediaIndex] || mediaItems[0];
+
+  // Keep video playing silently on loop just like front end
+  useEffect(() => {
+    if (currentMedia.type !== 'video') return;
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+    videoEl.defaultMuted = true;
+    videoEl.muted = true;
+    videoEl.loop = true;
+    videoEl.playsInline = true;
+    videoEl.play().catch(() => {});
+  }, [currentMedia]);
+
+  const buildUpdatedOutfit = (
+    overrideSlots?: [string, string, string, string],
+    overrideVideo?: string,
+    overrideAvailable?: boolean
+  ): LehengaOutfit => {
+    const slots = overrideSlots ?? imageSlots;
+    const vid = (overrideVideo !== undefined ? overrideVideo : videoUrl).trim();
+    const avail = overrideAvailable ?? available;
+
+    const validImages = slots.map((s) => s.trim()).filter(Boolean).slice(0, 4);
+    const fallbackImage =
+      validImages[0] ||
+      (outfit.mediaType === 'image' && outfit.mediaUrl ? outfit.mediaUrl : '') ||
+      '/images/lehenga-orange-zardosi.jpg';
+    const primaryMediaUrl = validImages[0] || vid || fallbackImage;
+    const primaryMediaType: 'image' | 'video' =
+      validImages.length > 0 ? 'image' : vid ? 'video' : 'image';
+    const finalImages =
+      validImages.length > 0
+        ? validImages
+        : primaryMediaType === 'image'
+        ? [primaryMediaUrl]
+        : [];
+
+    const parsedSizes = sizesText
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    return {
+      ...outfit,
+      code: code.trim().toUpperCase() || outfit.code,
+      title: title.trim() || outfit.title,
+      vibeCategory: vibeCategory.trim() || 'Navratri Ni Pehvesh',
+      description: description.trim(),
+      pricePerDay: Math.max(100, Number(pricePerDay) || outfit.pricePerDay),
+      sizes: parsedSizes.length > 0 ? parsedSizes : ['XS-S', 'M-L'],
+      available: avail,
+      mediaUrl: primaryMediaUrl,
+      mediaType: primaryMediaType,
+      images: finalImages,
+      videoUrl: vid,
+    };
+  };
+
+  const hasUnsavedChanges = useMemo(() => {
+    const currentImgs =
+      Array.isArray(outfit.images) && outfit.images.length > 0
+        ? outfit.images
+        : outfit.mediaType === 'image' && outfit.mediaUrl
+        ? [outfit.mediaUrl]
+        : [];
+    const savedSlots = [
+      currentImgs[0] || '',
+      currentImgs[1] || '',
+      currentImgs[2] || '',
+      currentImgs[3] || '',
+    ];
+    const savedVid = outfit.videoUrl || (outfit.mediaType === 'video' ? outfit.mediaUrl : '');
+
+    return (
+      code.trim().toUpperCase() !== outfit.code ||
+      title.trim() !== outfit.title ||
+      vibeCategory.trim() !== outfit.vibeCategory ||
+      description.trim() !== outfit.description ||
+      Number(pricePerDay) !== outfit.pricePerDay ||
+      sizesText.trim() !== outfit.sizes.join(', ') ||
+      available !== outfit.available ||
+      videoUrl.trim() !== savedVid ||
+      JSON.stringify(imageSlots) !== JSON.stringify(savedSlots)
+    );
+  }, [
+    code,
+    title,
+    vibeCategory,
+    description,
+    pricePerDay,
+    sizesText,
+    available,
+    videoUrl,
+    imageSlots,
+    outfit,
+  ]);
+
+  const handleSaveCard = async (
+    customSlots?: [string, string, string, string],
+    customVid?: string,
+    customAvail?: boolean,
+    toastMsg?: string
+  ) => {
+    setIsSaving(true);
+    try {
+      const nextOutfit = buildUpdatedOutfit(customSlots, customVid, customAvail);
+      await onSaveOutfit(
+        nextOutfit,
+        toastMsg || `Synced "${nextOutfit.title}" (${nextOutfit.code}) to live storefront!`
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handlePhotoUpload = async (slotIdx: number, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingSlot(`img-${slotIdx}`);
+    try {
+      const url = await uploadFileToBackend(file, `lehenga-img-${slotIdx + 1}`);
+      const nextSlots = [...imageSlots] as [string, string, string, string];
+      nextSlots[slotIdx] = url;
+      setImageSlots(nextSlots);
+      await handleSaveCard(
+        nextSlots,
+        undefined,
+        undefined,
+        `Uploaded & synced Photo ${slotIdx + 1} for ${code}!`
+      );
+    } finally {
+      setUploadingSlot(null);
+      e.target.value = '';
+    }
+  };
+
+  const handleBatchPhotosUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []).slice(0, 4);
+    if (files.length === 0) return;
+    setUploadingSlot('batch');
+    try {
+      const urls = await Promise.all(
+        files.map((f, idx) => uploadFileToBackend(f, `lehenga-img-${idx + 1}`))
+      );
+      const nextSlots = [...imageSlots] as [string, string, string, string];
+      for (let i = 0; i < urls.length && i < 4; i++) {
+        nextSlots[i] = urls[i];
+      }
+      setImageSlots(nextSlots);
+      await handleSaveCard(
+        nextSlots,
+        undefined,
+        undefined,
+        `Uploaded & synced ${urls.length} photo(s) for ${code}!`
+      );
+    } finally {
+      setUploadingSlot(null);
+      e.target.value = '';
+    }
+  };
+
+  const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingSlot('video');
+    try {
+      const url = await uploadFileToBackend(file, 'lehenga-video');
+      setVideoUrl(url);
+      setActiveMediaIndex(0);
+      await handleSaveCard(
+        undefined,
+        url,
+        undefined,
+        `Uploaded & synced primary looping Video for ${code}!`
+      );
+    } finally {
+      setUploadingSlot(null);
+      e.target.value = '';
+    }
+  };
+
+  return (
+    <article className="group flex flex-col bg-white rounded-2xl overflow-hidden border border-[#F8BBD0]/80 hover:border-[#D81B60] transition-all duration-300 shadow-[0_12px_32px_-12px_rgba(216,27,96,0.12)]">
+      {/* 3:4 Full-Length Portrait Stage — Exact Match with Front End */}
+      <div className="relative aspect-[3/4] w-full bg-[#FFF0F5] overflow-hidden">
+        {currentMedia.type === 'video' ? (
+          <video
+            ref={videoRef}
+            key={currentMedia.url}
+            src={currentMedia.url}
+            onClick={() => onOpenDetailEditor(buildUpdatedOutfit())}
+            className="w-full h-full object-cover object-top cursor-pointer"
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+            onCanPlay={(e) => {
+              e.currentTarget.muted = true;
+              e.currentTarget.play().catch(() => {});
+            }}
+            onPause={(e) => {
+              e.currentTarget.muted = true;
+              e.currentTarget.play().catch(() => {});
+            }}
+          />
+        ) : (
+          <img
+            src={currentMedia.url}
+            alt={title}
+            onClick={() => onOpenDetailEditor(buildUpdatedOutfit())}
+            className="w-full h-full object-cover object-top transition-transform duration-700 ease-out group-hover:scale-105 cursor-pointer"
+          />
+        )}
+
+        {/* Top Row: Editable SKU Pill & Quick Actions (Media Drawer, Detail View, Delete) */}
+        <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between gap-2 z-10">
+          <input
+            type="text"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            onBlur={() => {
+              if (hasUnsavedChanges) handleSaveCard();
+            }}
+            title="Click to edit SKU code"
+            className="w-28 px-2.5 py-1 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] text-[10px] font-mono-num uppercase tracking-wider text-[#4A1525] font-semibold focus:outline-none focus:border-[#D81B60] shadow-xs"
+          />
+
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setShowMediaTray((prev) => !prev)}
+              title="Edit 4 Photos & 1 Video"
+              className={`px-2.5 py-1.5 rounded-full text-[10px] font-semibold backdrop-blur-md border transition-colors inline-flex items-center gap-1 shadow-xs cursor-pointer ${
+                showMediaTray
+                  ? 'bg-[#D81B60] text-white border-[#D81B60]'
+                  : 'bg-white/95 text-[#4A1525] border-[#F8BBD0] hover:bg-[#FFF0F5]'
+              }`}
+            >
+              <Upload className="w-3 h-3" />
+              <span>{showMediaTray ? 'Done Media' : 'Edit Media'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onOpenDetailEditor(buildUpdatedOutfit())}
+              title="Open Full Detail Page View & Editor"
+              className="w-8 h-8 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] flex items-center justify-center text-[#4A1525] hover:text-[#D81B60] hover:bg-[#FFF0F5] transition-colors shadow-xs cursor-pointer"
+            >
+              <Eye className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onDeleteOutfit(outfit.id)}
+              title="Delete Listing"
+              className="w-8 h-8 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] flex items-center justify-center text-red-600 hover:bg-red-50 transition-colors shadow-xs cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Quick Overlay Media Manager (1 Video + 4 Photos) right inside the 3:4 Card */}
+        {showMediaTray && (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="absolute inset-x-2.5 top-14 bottom-12 z-20 rounded-2xl bg-white/96 backdrop-blur-md border border-[#F8BBD0] p-3 overflow-y-auto luxury-scroll shadow-xl flex flex-col justify-between space-y-2.5"
+          >
+            <div className="space-y-2">
+              <div className="flex items-center justify-between border-b border-[#FCE4EC] pb-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[#D81B60]">
+                  Card Media (1 Looping Video + 4 Photos)
+                </span>
+                <input
+                  ref={batchPhotosInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleBatchPhotosUpload}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => batchPhotosInputRef.current?.click()}
+                  className="px-2 py-0.5 rounded bg-[#4A1525] text-white text-[9px] font-semibold hover:bg-[#D81B60] cursor-pointer"
+                >
+                  {uploadingSlot === 'batch' ? 'Uploading...' : '+ Upload 4 Photos'}
+                </button>
+              </div>
+
+              {/* Optional Video Slot (Uses Photo 1 on main thumbnail when empty or cleared) */}
+              <div className="p-2 rounded-xl bg-[#FFF0F5] border border-[#F8BBD0] space-y-1.5">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[10px] font-semibold text-[#4A1525] flex items-center gap-1">
+                    <Film className="w-3 h-3 text-[#D81B60]" />
+                    <span>Optional Video (Shows Photo 1 if empty)</span>
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      ref={videoFileInputRef}
+                      type="file"
+                      accept="video/mp4,video/webm,video/quicktime,video/*"
+                      onChange={handleVideoUpload}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => videoFileInputRef.current?.click()}
+                      className="px-2 py-0.5 rounded bg-[#D81B60] text-white text-[9px] font-semibold cursor-pointer"
+                    >
+                      {uploadingSlot === 'video' ? 'Uploading...' : 'Upload Video'}
+                    </button>
+                    {videoUrl.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVideoUrl('');
+                          setActiveMediaIndex(0);
+                          handleSaveCard(
+                            undefined,
+                            '',
+                            undefined,
+                            `Cleared video for ${code} — Photo 1 is now the main thumbnail!`
+                          );
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-red-50 border border-red-200 text-[9px] text-red-600 font-semibold hover:bg-red-100 cursor-pointer"
+                      >
+                        Clear Video
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <input
+                  type="text"
+                  value={videoUrl}
+                  onChange={(e) => {
+                    const nextVal = e.target.value;
+                    setVideoUrl(nextVal);
+                    if (!nextVal.trim()) {
+                      setActiveMediaIndex(0);
+                    }
+                  }}
+                  onBlur={() => handleSaveCard(undefined, videoUrl.trim())}
+                  placeholder="Optional: Leave empty to show Photo 1 as main thumbnail..."
+                  className="w-full px-2 py-1 rounded-lg bg-white border border-[#F8BBD0] text-[10px] text-[#4A1525] focus:outline-none focus:border-[#D81B60]"
+                />
+              </div>
+
+              {/* 4 Photo Slots */}
+              <div className="space-y-1.5">
+                {[0, 1, 2, 3].map((slotIdx) => (
+                  <div
+                    key={slotIdx}
+                    className="flex items-center gap-2 p-1.5 rounded-xl bg-[#FFF9FB] border border-[#F8BBD0]/70"
+                  >
+                    <div className="w-8 h-10 rounded-md overflow-hidden bg-[#FFF0F5] border border-[#F8BBD0] shrink-0 flex items-center justify-center">
+                      {imageSlots[slotIdx] ? (
+                        <img
+                          src={imageSlots[slotIdx]}
+                          alt={`Photo ${slotIdx + 1}`}
+                          className="w-full h-full object-cover object-top"
+                        />
+                      ) : (
+                        <ImageIcon className="w-3.5 h-3.5 text-[#4A1525]/30" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <input
+                        type="text"
+                        value={imageSlots[slotIdx]}
+                        onChange={(e) => {
+                          const next = [...imageSlots] as [string, string, string, string];
+                          next[slotIdx] = e.target.value;
+                          setImageSlots(next);
+                        }}
+                        onBlur={() => handleSaveCard()}
+                        placeholder={`Photo ${slotIdx + 1} URL...`}
+                        className="w-full px-2 py-1 rounded bg-white border border-[#F8BBD0] text-[10px] text-[#4A1525] focus:outline-none focus:border-[#D81B60]"
+                      />
+                    </div>
+                    <input
+                      ref={photoFileInputRefs[slotIdx]}
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handlePhotoUpload(slotIdx, e)}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => photoFileInputRefs[slotIdx].current?.click()}
+                      className="px-2 py-1 rounded-lg bg-[#FFF0F5] hover:bg-[#D81B60] hover:text-white text-[9px] font-semibold text-[#4A1525] border border-[#F8BBD0] shrink-0 cursor-pointer"
+                    >
+                      {uploadingSlot === `img-${slotIdx}` ? '...' : `Upload #${slotIdx + 1}`}
+                    </button>
+                    {imageSlots[slotIdx] && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = [...imageSlots] as [string, string, string, string];
+                          next[slotIdx] = '';
+                          setImageSlots(next);
+                          handleSaveCard(next);
+                        }}
+                        className="text-red-500 hover:text-red-700 p-0.5 cursor-pointer"
+                        title="Clear photo"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Front-End Media Switcher Bar at Bottom of 3:4 Portrait */}
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-1 bg-white/95 backdrop-blur-md border border-[#F8BBD0]/80 rounded-xl p-1 shadow-sm z-10"
+        >
+          {mediaItems.map((media, idx) => (
+            <button
+              key={`${media.label}-${idx}`}
+              type="button"
+              onClick={() => setActiveMediaIndex(idx)}
+              className={`flex-1 py-1 px-1.5 text-[10px] font-semibold rounded-lg transition-colors inline-flex items-center justify-center gap-1 cursor-pointer ${
+                activeMediaIndex === idx
+                  ? 'bg-[#D81B60] text-white'
+                  : 'text-[#4A1525]/75 hover:text-[#D81B60]'
+              }`}
+            >
+              {media.type === 'video' && <Film className="w-3 h-3 shrink-0" />}
+              <span className="truncate">{media.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Editable Card Details — Styled Identically to Front-End ProductCard */}
+      <div className="p-5 flex-1 flex flex-col justify-between bg-white">
+        <div className="space-y-2">
+          {/* Category & Availability Toggle */}
+          <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.16em] font-semibold">
+            <input
+              type="text"
+              value={vibeCategory}
+              onChange={(e) => setVibeCategory(e.target.value)}
+              onBlur={() => {
+                if (hasUnsavedChanges) handleSaveCard();
+              }}
+              placeholder="Occasion Category"
+              title="Click to edit occasion category"
+              className="flex-1 min-w-0 bg-transparent border-b border-transparent hover:border-[#F8BBD0] focus:border-[#D81B60] text-[10px] uppercase tracking-[0.16em] text-[#880E4F]/80 font-semibold focus:outline-none py-0.5"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const nextAvail = !available;
+                setAvailable(nextAvail);
+                handleSaveCard(undefined, undefined, nextAvail);
+              }}
+              className={`shrink-0 font-semibold cursor-pointer ${
+                available ? 'text-emerald-700' : 'text-amber-600'
+              }`}
+              title="Click to toggle availability"
+            >
+              {available ? 'Available' : 'Booked'}
+            </button>
+          </div>
+
+          {/* Editable Outfit Title */}
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onBlur={() => {
+              if (hasUnsavedChanges) handleSaveCard();
+            }}
+            placeholder="Outfit Title..."
+            title="Click to edit outfit title"
+            className="w-full font-editorial text-2xl font-semibold text-[#4A1525] leading-snug bg-transparent border-b border-transparent hover:border-[#F8BBD0] focus:border-[#D81B60] focus:outline-none py-0.5"
+          />
+
+          {/* Editable Description */}
+          <textarea
+            rows={2}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            onBlur={() => {
+              if (hasUnsavedChanges) handleSaveCard();
+            }}
+            placeholder="Outfit description..."
+            title="Click to edit description"
+            className="w-full text-xs text-[#4A1525]/70 leading-relaxed bg-transparent border border-transparent hover:border-[#F8BBD0] focus:border-[#D81B60] focus:bg-[#FFF9FB] rounded-lg p-1 -mx-1 focus:outline-none resize-none"
+          />
+
+          {/* Editable Sizes Row */}
+          <div className="pt-2.5 border-t border-[#FCE4EC] flex items-center justify-between gap-2 text-[11px] text-[#4A1525]/70">
+            <span className="text-[10px] uppercase tracking-wider text-[#4A1525]/55 font-semibold shrink-0">
+              Sizes
+            </span>
+            <input
+              type="text"
+              value={sizesText}
+              onChange={(e) => setSizesText(e.target.value)}
+              onBlur={() => {
+                if (hasUnsavedChanges) handleSaveCard();
+              }}
+              placeholder="XS-S, M-L"
+              title="Comma-separated sizes"
+              className="w-40 text-right font-mono-num text-[10px] text-[#4A1525] bg-[#FFF0F5] px-2.5 py-1 rounded-full border border-[#F8BBD0]/80 focus:outline-none focus:border-[#D81B60]"
+            />
+          </div>
+        </div>
+
+        {/* Pricing & Action Row */}
+        <div className="mt-4 pt-3.5 border-t border-[#FCE4EC] flex items-center justify-between gap-2">
+          <div className="flex items-baseline gap-1">
+            <span className="text-lg font-semibold text-[#4A1525]">₹</span>
+            <input
+              type="number"
+              value={pricePerDay}
+              onChange={(e) => setPricePerDay(e.target.value)}
+              onBlur={() => {
+                if (hasUnsavedChanges) handleSaveCard();
+              }}
+              title="Click to edit daily rental price"
+              className="w-20 text-lg font-semibold text-[#4A1525] bg-transparent border-b border-transparent hover:border-[#F8BBD0] focus:border-[#D81B60] focus:outline-none"
+            />
+            <span className="text-[11px] text-[#4A1525]/55">/ day</span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onOpenDetailEditor(buildUpdatedOutfit())}
+              className="p-2.5 rounded-xl bg-[#FFF0F5] border border-[#F8BBD0] text-[#4A1525] hover:text-[#D81B60] hover:border-[#D81B60] transition-colors cursor-pointer"
+              title="Open & Edit Full Detailed Listing Page"
+            >
+              <Eye className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleSaveCard()}
+              disabled={isSaving}
+              className={`px-3.5 py-2.5 rounded-xl text-xs uppercase tracking-wider font-semibold transition-colors inline-flex items-center gap-1.5 shadow-xs cursor-pointer ${
+                hasUnsavedChanges
+                  ? 'bg-[#D81B60] text-white hover:bg-[#AD1457]'
+                  : 'bg-[#4A1525] text-white hover:bg-[#D81B60]'
+              }`}
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>{isSaving ? 'Syncing...' : hasUnsavedChanges ? 'Save Sync' : 'Synced'}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+};
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   outfits,
@@ -67,40 +764,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [successBanner, setSuccessBanner] = useState<string | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
-  // Local editable copy of SiteSettings for Banner & Logos
+  // Local editable copy of SiteSettings
   const [draftSettings, setDraftSettings] = useState<SiteSettings>(siteSettings);
+  useEffect(() => {
+    setDraftSettings(siteSettings);
+  }, [siteSettings]);
 
-  // Lehenga Add / Edit Form State
-  const nextSkuNumber = outfits.length + 1;
-  const defaultCode = `LOL-IND-0${nextSkuNumber}`;
+  // Grid Filtering & Sorting (Matches Front End)
+  const [selectedVibe, setSelectedVibe] = useState<string>('All Vibes');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'featured' | 'price-asc' | 'price-desc'>('featured');
 
-  const [editingOutfitId, setEditingOutfitId] = useState<string | null>(null);
-  const [title, setTitle] = useState('');
-  const [code, setCode] = useState(defaultCode);
-  const [pricePerDay, setPricePerDay] = useState('2499');
-  const [vibeCategory, setVibeCategory] = useState('Sangeet Main Character');
-  const [sizesInput, setSizesInput] = useState('XS-S, M-L');
-  const [description, setDescription] = useState(HUMOR_TEMPLATES[0].description);
-  const [ogHumorTagline, setOgHumorTagline] = useState(HUMOR_TEMPLATES[0].ogTagline);
-
-  // 4 Images + 1 Video state
-  const [imageSlots, setImageSlots] = useState<[string, string, string, string]>([
-    '/images/lehenga-orange-zardosi.jpg',
-    '',
-    '',
-    '',
-  ]);
-  const [videoUrl, setVideoUrl] = useState('');
-  const [uploadingSlot, setUploadingSlot] = useState<string | null>(null);
-
-  const imageInputRefs = [
+  // Detailed Listing Page Editor state (Matches Front-End LookbookModal layout)
+  const [detailEditOutfit, setDetailEditOutfit] = useState<LehengaOutfit | null>(null);
+  const [detailActiveMediaIdx, setDetailActiveMediaIdx] = useState(0);
+  const [detailIsZoomed, setDetailIsZoomed] = useState(false);
+  const [detailZoomOrigin, setDetailZoomOrigin] = useState({ x: 50, y: 35 });
+  const [detailUploadingSlot, setDetailUploadingSlot] = useState<string | null>(null);
+  const detailMainVideoRef = useRef<HTMLVideoElement | null>(null);
+  const detailPhotoInputRefs = [
     useRef<HTMLInputElement | null>(null),
     useRef<HTMLInputElement | null>(null),
     useRef<HTMLInputElement | null>(null),
     useRef<HTMLInputElement | null>(null),
   ];
-  const multiImageInputRef = useRef<HTMLInputElement | null>(null);
-  const outfitVideoInputRef = useRef<HTMLInputElement | null>(null);
+  const detailVideoInputRef = useRef<HTMLInputElement | null>(null);
+
   const heroVideoInputRef = useRef<HTMLInputElement | null>(null);
   const heroPosterInputRef = useRef<HTMLInputElement | null>(null);
   const topLogoInputRef = useRef<HTMLInputElement | null>(null);
@@ -108,226 +797,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const showToast = (msg: string) => {
     setSuccessBanner(msg);
-    setTimeout(() => setSuccessBanner(null), 4500);
+    setTimeout(() => setSuccessBanner(null), 4000);
   };
 
-  // Upload helper that saves file to /uploads on the backend and returns a clean URL
-  const uploadFileToBackend = async (file: File, prefix: string): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = async () => {
-        if (typeof reader.result !== 'string') {
-          reject(new Error('Failed to read file'));
-          return;
+  // Dynamic Occasion Tabs (Identical to Front End)
+  const dynamicVibeFilters = useMemo(() => {
+    const primaryLabel = draftSettings.curatedCollectionTitle || 'Navratri Ni Pehvesh';
+    return [{ label: primaryLabel, value: 'All Vibes' }];
+  }, [draftSettings.curatedCollectionTitle]);
+
+  const filteredOutfits = useMemo(() => {
+    return outfits
+      .filter((item) => {
+        if (selectedVibe !== 'All Vibes' && item.vibeCategory !== selectedVibe) {
+          return false;
         }
-        try {
-          if (prefix === 'hero-banner-video') {
-            const res = await fetch('/api/banner-video', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ videoDataUrl: reader.result }),
-            });
-            if (res.ok) {
-              const data = await res.json();
-              resolve(data.url);
-              return;
-            }
-          } else {
-            const res = await fetch('/api/upload-media', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ dataUrl: reader.result, prefix }),
-            });
-            if (res.ok) {
-              const data = await res.json();
-              resolve(data.url);
-              return;
-            }
-          }
-          resolve(reader.result);
-        } catch {
-          resolve(reader.result);
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          return (
+            item.title.toLowerCase().includes(q) ||
+            item.code.toLowerCase().includes(q) ||
+            item.description.toLowerCase().includes(q) ||
+            item.vibeCategory.toLowerCase().includes(q)
+          );
         }
-      };
-      reader.onerror = () => reject(new Error('File read error'));
-      reader.readAsDataURL(file);
-    });
-  };
-
-  const handleImageSlotChange = (index: number, val: string) => {
-    setImageSlots((prev) => {
-      const next = [...prev] as [string, string, string, string];
-      next[index] = val;
-      return next;
-    });
-  };
-
-  const handleSingleImageUpload = async (
-    index: number,
-    e: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploadingSlot(`img-${index}`);
-    try {
-      const uploadedUrl = await uploadFileToBackend(file, `lehenga-img-${index + 1}`);
-      handleImageSlotChange(index, uploadedUrl);
-      showToast(`Uploaded Image ${index + 1} for lehenga.`);
-    } finally {
-      setUploadingSlot(null);
-      e.target.value = '';
-    }
-  };
-
-  const handleBatchImagesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []).slice(0, 4);
-    if (files.length === 0) return;
-    setUploadingSlot('batch-img');
-    try {
-      const uploadedUrls = await Promise.all(
-        files.map((file, idx) => uploadFileToBackend(file, `lehenga-img-${idx + 1}`))
-      );
-      setImageSlots((prev) => {
-        const next = [...prev] as [string, string, string, string];
-        let cursor = 0;
-        for (let i = 0; i < 4 && cursor < uploadedUrls.length; i++) {
-          if (!next[i] || i < uploadedUrls.length) {
-            next[i] = uploadedUrls[cursor++];
-          }
-        }
-        return next;
+        return true;
+      })
+      .sort((a, b) => {
+        if (sortBy === 'price-asc') return a.pricePerDay - b.pricePerDay;
+        if (sortBy === 'price-desc') return b.pricePerDay - a.pricePerDay;
+        return 0;
       });
-      showToast(`Uploaded ${uploadedUrls.length} photo(s) for lehenga.`);
-    } finally {
-      setUploadingSlot(null);
-      e.target.value = '';
-    }
-  };
+  }, [outfits, selectedVibe, searchQuery, sortBy]);
 
-  const handleOutfitVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploadingSlot('video');
-    try {
-      const uploadedUrl = await uploadFileToBackend(file, 'lehenga-video');
-      setVideoUrl(uploadedUrl);
-      showToast('Uploaded twirl video for lehenga.');
-    } finally {
-      setUploadingSlot(null);
-      e.target.value = '';
-    }
-  };
-
-  // Populate form for editing an existing lehenga
-  const startEditingOutfit = (item: LehengaOutfit) => {
-    setEditingOutfitId(item.id);
-    setTitle(item.title);
-    setCode(item.code);
-    setPricePerDay(String(item.pricePerDay));
-    setVibeCategory(item.vibeCategory);
-    setSizesInput(item.sizes.join(', '));
-    setDescription(item.description);
-    setOgHumorTagline(item.ogHumorTagline);
-
-    const existingImages =
-      Array.isArray(item.images) && item.images.length > 0
-        ? item.images
-        : item.mediaType === 'image' && item.mediaUrl
-        ? [item.mediaUrl]
-        : [];
-
-    setImageSlots([
-      existingImages[0] || '',
-      existingImages[1] || '',
-      existingImages[2] || '',
-      existingImages[3] || '',
-    ]);
-    setVideoUrl(item.videoUrl || (item.mediaType === 'video' ? item.mediaUrl : ''));
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const cancelEditingOutfit = () => {
-    setEditingOutfitId(null);
-    setTitle('');
-    setCode(`LOL-IND-0${outfits.length + 1}`);
-    setPricePerDay('2499');
-    setVibeCategory('Sangeet Main Character');
-    setImageSlots(['/images/lehenga-orange-zardosi.jpg', '', '', '']);
-    setVideoUrl('');
-  };
-
-  const handleOutfitSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim()) return;
-
-    const validImages = imageSlots.map((s) => s.trim()).filter(Boolean).slice(0, 4);
-    const cleanVideoUrl = videoUrl.trim();
-    const primaryMediaUrl =
-      validImages[0] || cleanVideoUrl || '/images/lehenga-orange-zardosi.jpg';
-    const primaryMediaType: 'image' | 'video' =
-      validImages.length > 0 ? 'image' : cleanVideoUrl ? 'video' : 'image';
-    const finalImages =
-      validImages.length > 0
-        ? validImages
-        : primaryMediaType === 'image'
-        ? [primaryMediaUrl]
-        : [];
-
-    if (editingOutfitId) {
-      const existing = outfits.find((o) => o.id === editingOutfitId);
-      const updatedOutfit: LehengaOutfit = {
-        id: editingOutfitId,
-        code: code.trim().toUpperCase() || defaultCode,
-        title: title.trim(),
-        pricePerDay: Math.max(499, Number(pricePerDay) || 2499),
-        description: description.trim(),
-        ogHumorTagline: ogHumorTagline.trim(),
-        mediaUrl: primaryMediaUrl,
-        mediaType: primaryMediaType,
-        images: finalImages,
-        videoUrl: cleanVideoUrl || undefined,
-        vibeCategory: vibeCategory.trim() || 'Sangeet Main Character',
-        sizes: sizesInput
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean),
-        available: existing ? existing.available : true,
-        createdAt: existing ? existing.createdAt : new Date().toISOString(),
-      };
-      await onUpdateOutfit(updatedOutfit);
-      showToast(`Updated "${updatedOutfit.title}" (${updatedOutfit.code}) — live on store now!`);
-      cancelEditingOutfit();
-    } else {
-      const newOutfit: LehengaOutfit = {
-        id: `lol-custom-${Date.now()}`,
-        code: code.trim().toUpperCase() || defaultCode,
-        title: title.trim(),
-        pricePerDay: Math.max(499, Number(pricePerDay) || 2499),
-        description: description.trim(),
-        ogHumorTagline: ogHumorTagline.trim(),
-        mediaUrl: primaryMediaUrl,
-        mediaType: primaryMediaType,
-        images: finalImages,
-        videoUrl: cleanVideoUrl || undefined,
-        vibeCategory: vibeCategory.trim() || 'Sangeet Main Character',
-        sizes: sizesInput
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean),
-        available: true,
-        createdAt: new Date().toISOString(),
-      };
-
-      await onAddOutfit(newOutfit);
-      showToast(`Published "${newOutfit.title}" (${newOutfit.code}) — live on store now!`);
-      setTitle('');
-      setCode(`LOL-IND-0${outfits.length + 2}`);
-      setImageSlots(['/images/lehenga-orange-zardosi.jpg', '', '', '']);
-      setVideoUrl('');
-    }
-  };
-
-  // Save Banner or Branding Settings to Backend
   const handleSaveSettings = async (nextSettings: SiteSettings, message: string) => {
     setIsSavingSettings(true);
     try {
@@ -339,528 +841,874 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  // Create a new lehenga card immediately in the grid so admin can edit it inline or in detail view
+  const handleCreateNewListingCard = async () => {
+    const nextNum = String(outfits.length + 1).padStart(2, '0');
+    const newCode = `LOL-IND-${nextNum}`;
+    const newOutfit: LehengaOutfit = {
+      id: `lol-custom-${Date.now()}`,
+      code: newCode,
+      title: `New Designer Lehenga ${nextNum}`,
+      pricePerDay: 2499,
+      description:
+        'Heavy mirror work, vibrant traditional prints, and custom-altered flare ready for Garba & Sangeet nights.',
+      ogHumorTagline:
+        'Why spend a fortune when you can break Instagram for ₹2,499/day? Rent it, flex it, return it tomorrow.',
+      mediaUrl: '/images/lehenga-orange-zardosi.jpg',
+      mediaType: 'image',
+      images: ['/images/lehenga-orange-zardosi.jpg'],
+      videoUrl: undefined,
+      vibeCategory:
+        selectedVibe === 'All Vibes'
+          ? draftSettings.curatedCollectionTitle || 'Navratri Ni Pehvesh'
+          : selectedVibe,
+      sizes: ['XS-S', 'M-L'],
+      available: true,
+      createdAt: new Date().toISOString(),
+    };
+    await onAddOutfit(newOutfit);
+    showToast(`Added new listing card ${newCode} — edit its photos, video, and text directly below!`);
+  };
+
+  // Detailed Page Editor Media Gallery (4 Photos + 1 Video)
+  const detailMediaGallery = useMemo(() => {
+    if (!detailEditOutfit) return [];
+    const imgs =
+      Array.isArray(detailEditOutfit.images) && detailEditOutfit.images.length > 0
+        ? detailEditOutfit.images
+        : detailEditOutfit.mediaType === 'image' && detailEditOutfit.mediaUrl
+        ? [detailEditOutfit.mediaUrl]
+        : [];
+    const slots = [
+      imgs[0] || '/images/lehenga-orange-zardosi.jpg',
+      imgs[1] || '',
+      imgs[2] || '',
+      imgs[3] || '',
+    ];
+    const vid =
+      detailEditOutfit.videoUrl ||
+      (detailEditOutfit.mediaType === 'video' ? detailEditOutfit.mediaUrl : '');
+
+    return [
+      { type: 'image' as const, url: slots[0], label: 'Photo 1', slotIndex: 0 },
+      { type: 'image' as const, url: slots[1], label: 'Photo 2', slotIndex: 1 },
+      { type: 'image' as const, url: slots[2], label: 'Photo 3', slotIndex: 2 },
+      { type: 'image' as const, url: slots[3], label: 'Photo 4', slotIndex: 3 },
+      { type: 'video' as const, url: vid, label: 'Video', slotIndex: 4 },
+    ];
+  }, [detailEditOutfit]);
+
+  const activeDetailMedia = detailMediaGallery[detailActiveMediaIdx] || detailMediaGallery[0];
+
+  useEffect(() => {
+    if (!activeDetailMedia || activeDetailMedia.type !== 'video' || !activeDetailMedia.url) return;
+    const v = detailMainVideoRef.current;
+    if (!v) return;
+    v.defaultMuted = true;
+    v.muted = true;
+    v.loop = true;
+    v.playsInline = true;
+    v.play().catch(() => {});
+  }, [activeDetailMedia]);
+
+  const handleSaveDetailOutfit = async (updated: LehengaOutfit, msg?: string) => {
+    setDetailEditOutfit(updated);
+    await onUpdateOutfit(updated);
+    if (msg) showToast(msg);
+  };
+
+  const handleDetailPhotoUpload = async (
+    slotIdx: number,
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    if (!detailEditOutfit) return;
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setDetailUploadingSlot(`img-${slotIdx}`);
+    try {
+      const uploadedUrl = await uploadFileToBackend(file, `lehenga-img-${slotIdx + 1}`);
+      const existing = Array.isArray(detailEditOutfit.images) ? [...detailEditOutfit.images] : [];
+      const slots = [
+        existing[0] || detailEditOutfit.mediaUrl || '',
+        existing[1] || '',
+        existing[2] || '',
+        existing[3] || '',
+      ];
+      slots[slotIdx] = uploadedUrl;
+      const validImages = slots.map((s) => s.trim()).filter(Boolean);
+      const primaryMediaUrl =
+        validImages[0] || detailEditOutfit.videoUrl || '/images/lehenga-orange-zardosi.jpg';
+      const nextOutfit: LehengaOutfit = {
+        ...detailEditOutfit,
+        images: validImages,
+        mediaUrl: primaryMediaUrl,
+        mediaType: validImages.length > 0 ? 'image' : detailEditOutfit.videoUrl ? 'video' : 'image',
+      };
+      setDetailActiveMediaIdx(slotIdx);
+      await handleSaveDetailOutfit(
+        nextOutfit,
+        `Updated Photo ${slotIdx + 1} for ${detailEditOutfit.code}!`
+      );
+    } finally {
+      setDetailUploadingSlot(null);
+      e.target.value = '';
+    }
+  };
+
+  const handleDetailVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!detailEditOutfit) return;
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setDetailUploadingSlot('video');
+    try {
+      const uploadedUrl = await uploadFileToBackend(file, 'lehenga-video');
+      const nextOutfit: LehengaOutfit = {
+        ...detailEditOutfit,
+        videoUrl: uploadedUrl,
+      };
+      setDetailActiveMediaIdx(4);
+      await handleSaveDetailOutfit(
+        nextOutfit,
+        `Uploaded looping Video for ${detailEditOutfit.code} (now front-grid thumbnail)!`
+      );
+    } finally {
+      setDetailUploadingSlot(null);
+      e.target.value = '';
+    }
+  };
+
   return (
-    <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
-      {/* Top Backend CMS Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-[#1C1310]/12">
+    <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      {/* Top Backend Admin Control Bar */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-5 rounded-2xl bg-white border border-[#F8BBD0] shadow-2xs">
         <div>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="px-2.5 py-0.5 rounded-full bg-[#E85D24]/15 text-[#E85D24] text-[10px] font-bold uppercase tracking-widest">
-              Backend Admin CMS
-            </span>
-            <span className="text-xs text-[#1C1310]/50 font-mono-num">/admin</span>
+          <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-[#D81B60]">
+            <span>Live Visual Backend Studio</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono-num text-[#4A1525]/60">/admin</span>
           </div>
-          <h1 className="font-editorial text-3xl sm:text-4xl font-semibold text-[#1C1310]">
-            LOL Studio Backend & Media Manager
+          <h1 className="font-editorial text-2xl sm:text-3xl font-semibold text-[#4A1525] mt-0.5">
+            Visual Storefront & Listing Editor
           </h1>
-          <p className="text-xs text-[#1C1310]/65 mt-1">
-            Manage all editable website content—lehenga photos/videos, hero banner video, and top &
-            bottom logos—strictly from this backend panel.
+          <p className="text-xs text-[#4A1525]/70 mt-0.5">
+            Edit any text, price, photo, or looping video directly on the storefront grid or
+            detailed listing view below—everything syncs live to the customer front end.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Mode Tabs */}
+          <div className="flex items-center gap-1.5 bg-[#FFF0F5] p-1.5 rounded-xl border border-[#F8BBD0]">
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('lehengas');
+                setDetailEditOutfit(null);
+              }}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'lehengas'
+                  ? 'bg-[#D81B60] text-white shadow-2xs'
+                  : 'text-[#4A1525]/75 hover:text-[#D81B60]'
+              }`}
+            >
+              <ShoppingBag className="w-3.5 h-3.5" />
+              <span>Storefront Grid ({outfits.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('banner');
+                setDetailEditOutfit(null);
+              }}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'banner'
+                  ? 'bg-[#D81B60] text-white shadow-2xs'
+                  : 'text-[#4A1525]/75 hover:text-[#D81B60]'
+              }`}
+            >
+              <Film className="w-3.5 h-3.5" />
+              <span>Hero Banner</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('branding');
+                setDetailEditOutfit(null);
+              }}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'branding'
+                  ? 'bg-[#D81B60] text-white shadow-2xs'
+                  : 'text-[#4A1525]/75 hover:text-[#D81B60]'
+              }`}
+            >
+              <Palette className="w-3.5 h-3.5" />
+              <span>Logos & Brand</span>
+            </button>
+          </div>
+
           <button
+            type="button"
             onClick={onBackToCatalog}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1C1310] text-white text-xs font-semibold hover:bg-[#E85D24] transition-colors cursor-pointer"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#4A1525] text-white text-xs font-semibold hover:bg-[#D81B60] transition-colors cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            <span>View Live Customer Website</span>
+            <span>View Customer Site</span>
             <ExternalLink className="w-3 h-3 opacity-75" />
           </button>
         </div>
       </div>
 
-      {/* Section Navigation Tabs */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-[#1C1310]/10 pb-4">
-        <button
-          onClick={() => setActiveTab('lehengas')}
-          className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            activeTab === 'lehengas'
-              ? 'bg-[#1C1310] text-white shadow-sm'
-              : 'bg-white text-[#1C1310]/70 hover:text-[#1C1310] border border-[#1C1310]/10'
-          }`}
-        >
-          <ShoppingBag className="w-4 h-4 text-[#E85D24]" />
-          <span>Inventory Management</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('banner')}
-          className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            activeTab === 'banner'
-              ? 'bg-[#1C1310] text-white shadow-sm'
-              : 'bg-white text-[#1C1310]/70 hover:text-[#1C1310] border border-[#1C1310]/10'
-          }`}
-        >
-          <Film className="w-4 h-4 text-[#E85D24]" />
-          <span>Banner Management</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('branding')}
-          className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            activeTab === 'branding'
-              ? 'bg-[#1C1310] text-white shadow-sm'
-              : 'bg-white text-[#1C1310]/70 hover:text-[#1C1310] border border-[#1C1310]/10'
-          }`}
-        >
-          <Palette className="w-4 h-4 text-[#E85D24]" />
-          <span>Logo Management</span>
-        </button>
-      </div>
-
       {successBanner && (
-        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium flex items-center gap-2.5">
+        <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium flex items-center gap-2.5">
           <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
           <span>{successBanner}</span>
         </div>
       )}
 
-      {/* TAB 1: LEHENGA COLLECTION MANAGER */}
+      {/* TAB 1: VISUAL STOREFRONT GRID & DETAILED PAGE EDITOR */}
       {activeTab === 'lehengas' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-          {/* Left: Add or Edit Lehenga Form */}
-          <form
-            onSubmit={handleOutfitSubmit}
-            className="lg:col-span-7 bg-white rounded-2xl p-6 sm:p-8 border border-[#1C1310]/10 shadow-xs space-y-5"
-          >
-            <div className="flex items-center justify-between border-b border-[#1C1310]/8 pb-4">
-              <div>
-                <h2 className="font-editorial text-2xl font-semibold text-[#1C1310]">
-                  {editingOutfitId ? 'Edit Selected Lehenga' : 'Add New Lehenga to Storefront'}
-                </h2>
-                <p className="text-[11px] text-[#1C1310]/60">
-                  {editingOutfitId
-                    ? 'Update the image, video, title, or daily rent below and click Save.'
-                    : 'Upload a lehenga photo or twirl video to publish it to the catalog.'}
-                </p>
-              </div>
-              {editingOutfitId ? (
-                <button
-                  type="button"
-                  onClick={cancelEditingOutfit}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-50 text-red-700 text-xs font-medium hover:bg-red-100 cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                  <span>Cancel Edit</span>
-                </button>
-              ) : (
-                <span className="text-[11px] font-mono-num text-[#E85D24] font-semibold">
-                  SKU: {defaultCode}
-                </span>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="sm:col-span-2">
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
-                  Outfit Title *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="e.g., The 'Sangeet Showstopper' Crimson Zardosi"
-                  className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310] focus:outline-none focus:bg-white focus:border-[#1C1310]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
-                  SKU Code *
-                </label>
-                <div className="relative">
-                  <Tag className="w-3.5 h-3.5 text-[#1C1310]/40 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    required
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs font-mono-num uppercase text-[#1C1310] focus:outline-none focus:bg-white focus:border-[#1C1310]"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
-                  Rent Per Day (₹) *
-                </label>
-                <div className="relative">
-                  <IndianRupee className="w-3.5 h-3.5 text-[#1C1310]/40 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="number"
-                    required
-                    value={pricePerDay}
-                    onChange={(e) => setPricePerDay(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310] focus:outline-none focus:bg-white focus:border-[#1C1310]"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
-                  Occasion Edit (Fully Customizable) *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={vibeCategory}
-                  onChange={(e) => setVibeCategory(e.target.value)}
-                  placeholder="Type custom occasion (e.g., Sangeet Main Character, Bridal Entry...)"
-                  className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310] focus:outline-none focus:bg-white focus:border-[#1C1310]"
-                />
-              </div>
-            </div>
-
-            {/* 4 Lehenga Images + 1 Twirl Video Upload Section */}
-            <div className="space-y-4 p-4 rounded-2xl bg-[#FAF8F5] border border-[#1C1310]/10">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]">
-                    Lehenga Media Gallery (Up to 4 Images & 1 Video)
-                  </label>
-                  <p className="text-[11px] text-[#1C1310]/55">
-                    Add up to 4 high-res photos (Image 1 is the primary cover) and 1 optional twirl
-                    video.
-                  </p>
-                </div>
-
-                <div>
-                  <input
-                    ref={multiImageInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={handleBatchImagesUpload}
-                    className="hidden"
-                  />
+        <>
+          {detailEditOutfit ? (
+            /* FULL DETAILED LISTING PAGE VISUAL EDITOR (Matches LookbookModal 1:1) */
+            <div className="space-y-6">
+              {/* Top Breadcrumb Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-4 py-3 border-b border-[#F8BBD0]/70">
+                <div className="flex items-center gap-2 text-xs text-[#4A1525]/75">
                   <button
                     type="button"
-                    onClick={() => multiImageInputRef.current?.click()}
-                    disabled={uploadingSlot !== null}
-                    className="px-3 py-1.5 rounded-lg bg-[#1C1310] hover:bg-[#E85D24] text-white text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                    onClick={() => setDetailEditOutfit(null)}
+                    className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-white border border-[#F8BBD0] text-[#4A1525] font-semibold hover:bg-[#FFF0F5] hover:text-[#D81B60] transition-colors cursor-pointer shadow-2xs"
                   >
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>
-                      {uploadingSlot === 'batch-img'
-                        ? 'Uploading Photos...'
-                        : 'Select Up to 4 Photos'}
-                    </span>
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    <span>Back to Backend Grid</span>
+                  </button>
+                  <ChevronRight className="w-3.5 h-3.5 text-[#4A1525]/35 hidden sm:block" />
+                  <span className="text-[#D81B60] font-semibold">
+                    Detailed Listing Page Live Editor
+                  </span>
+                  <ChevronRight className="w-3.5 h-3.5 text-[#4A1525]/35 hidden sm:block" />
+                  <span className="font-mono-num font-semibold text-[#4A1525]">
+                    {detailEditOutfit.code}
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSaveDetailOutfit(
+                      detailEditOutfit,
+                      `Saved & synced "${detailEditOutfit.title}" (${detailEditOutfit.code}) to storefront!`
+                    )
+                  }
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#D81B60] text-white text-xs font-semibold uppercase tracking-wider hover:bg-[#AD1457] transition-colors cursor-pointer shadow-xs"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Save & Sync Listing</span>
+                </button>
+              </div>
+
+              {/* Exact Front-End Detailed Listing Layout */}
+              <div className="w-full bg-white rounded-3xl overflow-hidden shadow-[0_24px_60px_-15px_rgba(216,27,96,0.12)] border border-[#F8BBD0]/80 grid grid-cols-1 lg:grid-cols-12">
+                {/* Left Column: Vertical Thumbnail Rail (4 Photos + 1 Video) + Main 3:4 Portrait Stage */}
+                <div className="lg:col-span-7 p-4 sm:p-6 bg-[#FFF5F8]/60 flex flex-col-reverse sm:flex-row gap-4 items-stretch">
+                  {/* Vertical Thumbnail Rail with Upload Triggers */}
+                  <div className="flex sm:flex-col gap-2.5 overflow-x-auto sm:overflow-y-auto no-scrollbar shrink-0 sm:w-24">
+                    {detailMediaGallery.map((item, idx) => {
+                      const isActive = detailActiveMediaIdx === idx;
+                      const isVideoSlot = item.type === 'video';
+                      return (
+                        <div
+                          key={item.label}
+                          className={`relative rounded-xl overflow-hidden border-2 transition-all shrink-0 w-20 sm:w-24 ${
+                            isActive
+                              ? 'border-[#D81B60] ring-2 ring-[#D81B60]/25 shadow-sm'
+                              : 'border-[#F8BBD0]/80 opacity-85 hover:opacity-100'
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDetailActiveMediaIdx(idx);
+                              setDetailIsZoomed(false);
+                            }}
+                            className="relative w-full h-22 sm:h-26 block bg-[#FFF0F5] cursor-pointer"
+                          >
+                            {isVideoSlot ? (
+                              item.url ? (
+                                <div className="relative w-full h-full bg-[#2B180A]">
+                                  <video
+                                    src={item.url}
+                                    className="w-full h-full object-cover object-top"
+                                    muted
+                                    loop
+                                    autoPlay
+                                    playsInline
+                                  />
+                                  <div className="absolute inset-0 bg-black/30 flex flex-col items-center justify-center text-white">
+                                    <span className="w-6 h-6 rounded-full bg-white/90 text-[#D81B60] flex items-center justify-center">
+                                      <Play className="w-3 h-3 fill-current ml-0.5" />
+                                    </span>
+                                    <span className="text-[8px] uppercase tracking-wider font-bold mt-1">
+                                      Video
+                                    </span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="w-full h-full flex flex-col items-center justify-center text-[#D81B60] p-1 text-center">
+                                  <Film className="w-4 h-4 mb-1" />
+                                  <span className="text-[9px] font-semibold">Add Video</span>
+                                </div>
+                              )
+                            ) : item.url ? (
+                              <img
+                                src={item.url}
+                                alt={item.label}
+                                className="w-full h-full object-cover object-top"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex flex-col items-center justify-center text-[#4A1525]/40 p-1 text-center">
+                                <ImageIcon className="w-4 h-4 mb-1" />
+                                <span className="text-[9px] font-semibold">{item.label}</span>
+                              </div>
+                            )}
+                          </button>
+
+                          {/* Upload / Clear Button on Bottom of Each Rail Slot */}
+                          {isVideoSlot ? (
+                            <div className="flex flex-col">
+                              <input
+                                ref={detailVideoInputRef}
+                                type="file"
+                                accept="video/mp4,video/webm,video/quicktime,video/*"
+                                onChange={handleDetailVideoUpload}
+                                className="hidden"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => detailVideoInputRef.current?.click()}
+                                className="w-full py-1 bg-[#4A1525] hover:bg-[#D81B60] text-white text-[9px] font-semibold uppercase tracking-wider flex items-center justify-center gap-1 cursor-pointer"
+                              >
+                                <Upload className="w-2.5 h-2.5" />
+                                <span>
+                                  {detailUploadingSlot === 'video' ? '...' : 'Upload Vid'}
+                                </span>
+                              </button>
+                              {item.url && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const firstImg =
+                                      (Array.isArray(detailEditOutfit.images) &&
+                                        detailEditOutfit.images[0]) ||
+                                      '/images/lehenga-orange-zardosi.jpg';
+                                    const nextOutfit: LehengaOutfit = {
+                                      ...detailEditOutfit,
+                                      videoUrl: '',
+                                      mediaType: 'image',
+                                      mediaUrl: firstImg,
+                                    };
+                                    setDetailActiveMediaIdx(0);
+                                    handleSaveDetailOutfit(
+                                      nextOutfit,
+                                      `Cleared video for ${detailEditOutfit.code} — Photo 1 is now the main thumbnail!`
+                                    );
+                                  }}
+                                  className="w-full py-0.5 bg-red-50 hover:bg-red-100 text-red-600 text-[8.5px] font-semibold uppercase tracking-wider border-t border-red-200 cursor-pointer"
+                                >
+                                  Clear Video
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <>
+                              <input
+                                ref={detailPhotoInputRefs[item.slotIndex]}
+                                type="file"
+                                accept="image/*"
+                                onChange={(e) => handleDetailPhotoUpload(item.slotIndex, e)}
+                                className="hidden"
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  detailPhotoInputRefs[item.slotIndex].current?.click()
+                                }
+                                className="w-full py-1 bg-[#FFF0F5] hover:bg-[#D81B60] hover:text-white text-[#4A1525] text-[9px] font-semibold uppercase tracking-wider flex items-center justify-center gap-1 border-t border-[#F8BBD0] cursor-pointer"
+                              >
+                                <Upload className="w-2.5 h-2.5" />
+                                <span>
+                                  {detailUploadingSlot === `img-${item.slotIndex}`
+                                    ? '...'
+                                    : item.label}
+                                </span>
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Main 3:4 Portrait Stage */}
+                  <div
+                    onMouseMove={(e) => {
+                      if (!detailIsZoomed) return;
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const x = ((e.clientX - rect.left) / rect.width) * 100;
+                      const y = ((e.clientY - rect.top) / rect.height) * 100;
+                      setDetailZoomOrigin({
+                        x: Math.max(0, Math.min(100, x)),
+                        y: Math.max(0, Math.min(100, y)),
+                      });
+                    }}
+                    className="relative flex-1 aspect-[3/4] rounded-2xl bg-[#FFF0F5] overflow-hidden border border-[#F8BBD0]/60"
+                  >
+                    {activeDetailMedia.type === 'video' ? (
+                      activeDetailMedia.url ? (
+                        <video
+                          ref={detailMainVideoRef}
+                          key={activeDetailMedia.url}
+                          src={activeDetailMedia.url}
+                          className="w-full h-full object-cover object-top"
+                          autoPlay
+                          muted
+                          loop
+                          playsInline
+                          preload="auto"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-3">
+                          <Film className="w-10 h-10 text-[#D81B60]" />
+                          <p className="text-sm font-semibold text-[#4A1525]">
+                            No Video Selected for This Listing
+                          </p>
+                          <p className="text-xs text-[#4A1525]/65 max-w-xs">
+                            Upload a video to make it the automatic silent looping thumbnail on the
+                            front grid page.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => detailVideoInputRef.current?.click()}
+                            className="px-4 py-2 rounded-xl bg-[#D81B60] text-white text-xs font-semibold cursor-pointer"
+                          >
+                            Upload Video Now
+                          </button>
+                        </div>
+                      )
+                    ) : activeDetailMedia.url ? (
+                      <img
+                        src={activeDetailMedia.url}
+                        alt={detailEditOutfit.title}
+                        style={{
+                          transformOrigin: `${detailZoomOrigin.x}% ${detailZoomOrigin.y}%`,
+                        }}
+                        className={`w-full h-full object-cover object-top transition-transform duration-300 ease-out ${
+                          detailIsZoomed ? 'scale-[2]' : 'scale-100'
+                        }`}
+                      />
+                    ) : (
+                      <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-3">
+                        <ImageIcon className="w-10 h-10 text-[#D81B60]" />
+                        <p className="text-sm font-semibold text-[#4A1525]">
+                          Empty {activeDetailMedia.label} Slot
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            detailPhotoInputRefs[activeDetailMedia.slotIndex].current?.click()
+                          }
+                          className="px-4 py-2 rounded-xl bg-[#D81B60] text-white text-xs font-semibold cursor-pointer"
+                        >
+                          Upload {activeDetailMedia.label}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Top-left Editable SKU Pill */}
+                    <div className="absolute top-4 left-4 z-10">
+                      <input
+                        type="text"
+                        value={detailEditOutfit.code}
+                        onChange={(e) =>
+                          setDetailEditOutfit({
+                            ...detailEditOutfit,
+                            code: e.target.value.toUpperCase(),
+                          })
+                        }
+                        onBlur={() => handleSaveDetailOutfit(detailEditOutfit)}
+                        className="w-32 px-3 py-1 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] text-[11px] font-mono-num font-semibold text-[#4A1525] shadow-2xs focus:outline-none focus:border-[#D81B60]"
+                      />
+                    </div>
+
+                    {/* Floating Zoom Button */}
+                    {activeDetailMedia.type === 'image' && activeDetailMedia.url && (
+                      <button
+                        type="button"
+                        onClick={() => setDetailIsZoomed((prev) => !prev)}
+                        className="absolute bottom-5 right-5 z-20 w-12 h-12 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] shadow-lg flex items-center justify-center text-[#4A1525] hover:bg-[#D81B60] hover:text-white transition-all cursor-pointer"
+                      >
+                        {detailIsZoomed ? (
+                          <ZoomOut className="w-5 h-5" />
+                        ) : (
+                          <ZoomIn className="w-5 h-5" />
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Right Column: Editable Full-Page Luxury Editorial Details */}
+                <div className="lg:col-span-5 p-6 sm:p-10 flex flex-col justify-between">
+                  <div className="space-y-6">
+                    {/* Editable Category */}
+                    <div className="flex items-center justify-between gap-2">
+                      <input
+                        type="text"
+                        value={detailEditOutfit.vibeCategory}
+                        onChange={(e) =>
+                          setDetailEditOutfit({
+                            ...detailEditOutfit,
+                            vibeCategory: e.target.value,
+                          })
+                        }
+                        onBlur={() => handleSaveDetailOutfit(detailEditOutfit)}
+                        className="text-xs uppercase tracking-[0.2em] text-[#D81B60] font-semibold bg-[#FFF0F5] px-3 py-1.5 rounded-lg border border-[#F8BBD0] focus:outline-none focus:border-[#D81B60]"
+                      />
+                      <span className="text-[11px] text-emerald-700 font-semibold">
+                        Live Detail Preview
+                      </span>
+                    </div>
+
+                    {/* Editable Title & Pricing */}
+                    <div className="space-y-3">
+                      <input
+                        type="text"
+                        value={detailEditOutfit.title}
+                        onChange={(e) =>
+                          setDetailEditOutfit({
+                            ...detailEditOutfit,
+                            title: e.target.value,
+                          })
+                        }
+                        onBlur={() => handleSaveDetailOutfit(detailEditOutfit)}
+                        className="w-full font-editorial text-3xl sm:text-4xl font-semibold text-[#4A1525] leading-tight bg-[#FFF9FB] px-3 py-1.5 rounded-xl border border-[#F8BBD0] focus:outline-none focus:border-[#D81B60]"
+                      />
+
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-3xl sm:text-4xl font-semibold text-[#4A1525]">
+                          ₹
+                        </span>
+                        <input
+                          type="number"
+                          value={detailEditOutfit.pricePerDay}
+                          onChange={(e) =>
+                            setDetailEditOutfit({
+                              ...detailEditOutfit,
+                              pricePerDay: Number(e.target.value) || 0,
+                            })
+                          }
+                          onBlur={() => handleSaveDetailOutfit(detailEditOutfit)}
+                          className="w-36 text-3xl sm:text-4xl font-semibold text-[#4A1525] bg-[#FFF9FB] px-3 py-1 rounded-xl border border-[#F8BBD0] focus:outline-none focus:border-[#D81B60]"
+                        />
+                        <span className="text-sm font-normal text-[#4A1525]/60">
+                          / day rental
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Editable Description */}
+                    <div>
+                      <label className="block text-[10px] uppercase tracking-wider text-[#4A1525]/55 font-semibold mb-1">
+                        Listing Description
+                      </label>
+                      <textarea
+                        rows={4}
+                        value={detailEditOutfit.description}
+                        onChange={(e) =>
+                          setDetailEditOutfit({
+                            ...detailEditOutfit,
+                            description: e.target.value,
+                          })
+                        }
+                        onBlur={() => handleSaveDetailOutfit(detailEditOutfit)}
+                        className="w-full text-sm sm:text-base text-[#4A1525]/85 leading-relaxed bg-[#FFF9FB] p-3 rounded-xl border border-[#F8BBD0] focus:outline-none focus:border-[#D81B60]"
+                      />
+                    </div>
+
+                    {/* Editable Sizes */}
+                    <div className="pt-4 border-t border-[#F8BBD0]/60 space-y-2.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold uppercase tracking-wider text-[#4A1525] flex items-center gap-1.5">
+                          <Ruler className="w-4 h-4 text-[#D81B60]" />
+                          Sizes (Comma Separated)
+                        </span>
+                      </div>
+                      <input
+                        type="text"
+                        value={detailEditOutfit.sizes.join(', ')}
+                        onChange={(e) =>
+                          setDetailEditOutfit({
+                            ...detailEditOutfit,
+                            sizes: e.target.value
+                              .split(',')
+                              .map((s) => s.trim())
+                              .filter(Boolean),
+                          })
+                        }
+                        onBlur={() => handleSaveDetailOutfit(detailEditOutfit)}
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#FFF9FB] border border-[#F8BBD0] text-xs font-semibold text-[#4A1525] focus:outline-none focus:border-[#D81B60]"
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        {detailEditOutfit.sizes.map((size) => (
+                          <span
+                            key={size}
+                            className="px-4 py-2 rounded-xl text-xs font-semibold border border-[#4A1525] bg-[#4A1525] text-white"
+                          >
+                            {size}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Studio Highlights (Same as Front End) */}
+                    <div className="grid grid-cols-2 gap-3 pt-4 border-t border-[#F8BBD0]/60">
+                      <div className="p-3 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0]/60 flex items-center gap-2.5">
+                        <ShieldCheck className="w-4 h-4 text-[#D81B60] shrink-0" />
+                        <span className="text-[11px] font-medium text-[#4A1525]/80">
+                          Steam-Sanitized & Custom Altered
+                        </span>
+                      </div>
+                      <div className="p-3 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0]/60 flex items-center gap-2.5">
+                        <Clock className="w-4 h-4 text-[#D81B60] shrink-0" />
+                        <span className="text-[11px] font-medium text-[#4A1525]/80">
+                          24-Hr Next-Day Return
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Bottom Save & Back Actions */}
+                  <div className="pt-8 mt-8 border-t border-[#F8BBD0]/60 flex flex-col sm:flex-row items-stretch sm:items-center gap-3.5">
+                    <button
+                      type="button"
+                      onClick={() => setDetailEditOutfit(null)}
+                      className="px-5 py-4 rounded-2xl border border-[#F8BBD0] bg-white text-xs font-semibold text-[#4A1525] hover:bg-[#FFF0F5] transition-colors cursor-pointer"
+                    >
+                      Done / Back to Grid
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleSaveDetailOutfit(
+                          detailEditOutfit,
+                          `Synced "${detailEditOutfit.title}" to live storefront!`
+                        )
+                      }
+                      className="flex-1 py-4 px-6 rounded-2xl bg-[#4A1525] text-white text-xs uppercase tracking-[0.16em] font-semibold hover:bg-[#D81B60] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+                    >
+                      <Save className="w-4 h-4" />
+                      <span>Save & Sync to Front End</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* FRONT-END IDENTICAL STOREFRONT GRID WITH IN-PLACE EDITING */
+            <div className="space-y-8">
+              {/* Editable Storefront Section Title & Subtitle (Exact Match to Front End) */}
+              <div className="text-center max-w-2xl mx-auto space-y-2 p-5 rounded-2xl bg-white/80 border border-[#F8BBD0]/80 shadow-2xs">
+                <input
+                  type="text"
+                  value={
+                    draftSettings.catalogSectionKicker ??
+                    DEFAULT_SITE_SETTINGS.catalogSectionKicker ??
+                    '10/10 MANDAL VIBES ONLY'
+                  }
+                  onChange={(e) =>
+                    setDraftSettings({ ...draftSettings, catalogSectionKicker: e.target.value })
+                  }
+                  onBlur={() =>
+                    handleSaveSettings(
+                      draftSettings,
+                      'Synced catalog section heading to live storefront!'
+                    )
+                  }
+                  title="Click to edit section kicker (syncs to front end)"
+                  className="w-full text-center text-[11px] uppercase tracking-[0.22em] text-[#D81B60] font-semibold bg-transparent border-b border-transparent hover:border-[#F8BBD0] focus:border-[#D81B60] focus:outline-none py-0.5"
+                />
+
+                <input
+                  type="text"
+                  value={
+                    draftSettings.catalogSectionTitle ??
+                    DEFAULT_SITE_SETTINGS.catalogSectionTitle ??
+                    'The Garba Night Essentials'
+                  }
+                  onChange={(e) =>
+                    setDraftSettings({ ...draftSettings, catalogSectionTitle: e.target.value })
+                  }
+                  onBlur={() =>
+                    handleSaveSettings(
+                      draftSettings,
+                      'Synced catalog section title to live storefront!'
+                    )
+                  }
+                  title="Click to edit section title (syncs to front end)"
+                  className="w-full text-center font-editorial text-3xl sm:text-5xl font-semibold text-[#4A1525] tracking-tight bg-transparent border-b border-transparent hover:border-[#F8BBD0] focus:border-[#D81B60] focus:outline-none py-0.5"
+                />
+
+                <textarea
+                  rows={3}
+                  value={
+                    draftSettings.catalogSectionSubtitle ??
+                    DEFAULT_SITE_SETTINGS.catalogSectionSubtitle ??
+                    ''
+                  }
+                  onChange={(e) =>
+                    setDraftSettings({
+                      ...draftSettings,
+                      catalogSectionSubtitle: e.target.value,
+                    })
+                  }
+                  onBlur={() =>
+                    handleSaveSettings(
+                      draftSettings,
+                      'Synced catalog section description to live storefront!'
+                    )
+                  }
+                  title="Click to edit section subtitle (syncs to front end)"
+                  className="w-full text-center text-xs sm:text-sm text-[#4A1525]/75 bg-transparent border border-transparent hover:border-[#F8BBD0] focus:border-[#D81B60] rounded-xl p-1.5 focus:outline-none resize-none"
+                />
+              </div>
+
+              {/* Filter, Search, Sort & "+ Add New Lehenga" Bar (Exact Match to Front End) */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-[#F8BBD0]/60">
+                {/* Occasion Tabs */}
+                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 md:pb-0">
+                  {dynamicVibeFilters.map((tab) => {
+                    const active = selectedVibe === tab.value;
+                    return (
+                      <button
+                        key={tab.value}
+                        type="button"
+                        onClick={() => setSelectedVibe(tab.value)}
+                        className={`px-4 py-2 rounded-full text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                          active
+                            ? 'bg-[#D81B60] text-white shadow-xs'
+                            : 'bg-white text-[#4A1525]/75 hover:text-[#D81B60] border border-[#F8BBD0]'
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Search, Sort & Add New Listing Controls */}
+                <div className="flex flex-wrap items-center justify-between md:justify-end gap-3 shrink-0">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Filter SKU or title..."
+                      className="pl-8 pr-3 py-2 rounded-full bg-white border border-[#F8BBD0] text-xs text-[#4A1525] focus:outline-none focus:border-[#D81B60] w-44"
+                    />
+                  </div>
+
+                  <div className="relative inline-flex items-center">
+                    <ArrowUpDown className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 pointer-events-none" />
+                    <select
+                      value={sortBy}
+                      onChange={(e) =>
+                        setSortBy(e.target.value as 'featured' | 'price-asc' | 'price-desc')
+                      }
+                      className="pl-8 pr-4 py-2 rounded-full bg-white border border-[#F8BBD0] text-xs font-medium text-[#4A1525] focus:outline-none focus:border-[#D81B60] cursor-pointer"
+                    >
+                      <option value="featured">Sort: Featured</option>
+                      <option value="price-asc">Rent: Low to High</option>
+                      <option value="price-desc">Rent: High to Low</option>
+                    </select>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleCreateNewListingCard}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#D81B60] text-white text-xs font-semibold hover:bg-[#AD1457] transition-colors shadow-xs cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add New Listing</span>
                   </button>
                 </div>
               </div>
 
-              {/* 4 Image Slots Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {[0, 1, 2, 3].map((slotIdx) => {
-                  const imgUrl = imageSlots[slotIdx];
-                  const isUploadingThis = uploadingSlot === `img-${slotIdx}`;
-                  return (
-                    <div
-                      key={slotIdx}
-                      className="flex items-center gap-2.5 p-2.5 rounded-xl bg-white border border-[#1C1310]/12"
-                    >
-                      <div className="w-12 h-16 rounded-lg overflow-hidden bg-[#EFECE6] border border-[#1C1310]/10 shrink-0 flex items-center justify-center">
-                        {imgUrl ? (
-                          <img
-                            src={imgUrl}
-                            alt={`Slot ${slotIdx + 1}`}
-                            className="w-full h-full object-cover object-top"
-                          />
-                        ) : (
-                          <ImageIcon className="w-4 h-4 text-[#1C1310]/30" />
-                        )}
-                      </div>
+              {/* 3-Column 3:4 Portrait Grid (Identical Layout to Front End) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-7 lg:gap-8">
+                {filteredOutfits.map((outfit) => (
+                  <EditableGridCard
+                    key={outfit.id}
+                    outfit={outfit}
+                    onSaveOutfit={async (updated, msg) => {
+                      await onUpdateOutfit(updated);
+                      if (msg) showToast(msg);
+                    }}
+                    onDeleteOutfit={async (id) => {
+                      await onDeleteOutfit(id);
+                      showToast('Removed listing from storefront.');
+                    }}
+                    onOpenDetailEditor={(o) => {
+                      setDetailEditOutfit(o);
+                      setDetailActiveMediaIdx(0);
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                  />
+                ))}
 
-                      <div className="flex-1 min-w-0 space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-semibold uppercase tracking-wider text-[#1C1310]/70">
-                            {slotIdx === 0 ? 'Image 1 (Cover) *' : `Image ${slotIdx + 1}`}
-                          </span>
-                          {imgUrl && (
-                            <button
-                              type="button"
-                              onClick={() => handleImageSlotChange(slotIdx, '')}
-                              className="text-[10px] text-red-600 hover:underline cursor-pointer"
-                            >
-                              Clear
-                            </button>
-                          )}
-                        </div>
-
-                        <input
-                          type="text"
-                          value={imgUrl}
-                          onChange={(e) => handleImageSlotChange(slotIdx, e.target.value)}
-                          placeholder={`Paste Image ${slotIdx + 1} URL or upload...`}
-                          className="w-full px-2.5 py-1.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-lg text-[11px] text-[#1C1310] focus:outline-none focus:bg-white focus:border-[#1C1310]"
-                        />
-
-                        <div>
-                          <input
-                            ref={imageInputRefs[slotIdx]}
-                            type="file"
-                            accept="image/*"
-                            onChange={(e) => handleSingleImageUpload(slotIdx, e)}
-                            className="hidden"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => imageInputRefs[slotIdx].current?.click()}
-                            disabled={uploadingSlot !== null}
-                            className="w-full py-1 px-2.5 rounded-lg border border-[#1C1310]/15 bg-[#FAF8F5] hover:bg-white text-[10px] font-semibold text-[#1C1310] inline-flex items-center justify-center gap-1.5 cursor-pointer"
-                          >
-                            <Upload className="w-3 h-3 text-[#E85D24]" />
-                            <span>
-                              {isUploadingThis ? 'Uploading...' : `Upload Image ${slotIdx + 1}`}
-                            </span>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* 1 Video Slot */}
-              <div className="pt-2 border-t border-[#1C1310]/10">
-                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 p-3 rounded-xl bg-white border border-[#1C1310]/12">
-                  <div className="w-14 h-18 rounded-lg overflow-hidden bg-[#1C1310] border border-[#1C1310]/15 shrink-0 flex items-center justify-center">
-                    {videoUrl ? (
-                      <video
-                        src={videoUrl}
-                        className="w-full h-full object-cover"
-                        muted
-                        loop
-                        autoPlay
-                        playsInline
-                      />
-                    ) : (
-                      <Film className="w-5 h-5 text-[#E85D24]" />
-                    )}
+                {/* Add New Lehenga Card Slot at End of Grid */}
+                <button
+                  type="button"
+                  onClick={handleCreateNewListingCard}
+                  className="group min-h-[520px] rounded-2xl border-2 border-dashed border-[#F48FB1] bg-white/60 hover:bg-[#FFF0F5]/70 hover:border-[#D81B60] transition-all flex flex-col items-center justify-center p-8 text-center space-y-3 cursor-pointer"
+                >
+                  <div className="w-14 h-14 rounded-full bg-[#FFF0F5] border border-[#F8BBD0] group-hover:bg-[#D81B60] group-hover:text-white text-[#D81B60] flex items-center justify-center transition-colors shadow-xs">
+                    <Plus className="w-6 h-6" />
                   </div>
-
-                  <div className="flex-1 w-full space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-semibold uppercase tracking-wider text-[#1C1310]/75 flex items-center gap-1.5">
-                        <Film className="w-3.5 h-3.5 text-[#E85D24]" />
-                        <span>1 Lehenga Video (Twirl / Reel MP4 or WebM)</span>
-                      </span>
-                      {videoUrl && (
-                        <button
-                          type="button"
-                          onClick={() => setVideoUrl('')}
-                          className="text-[10px] text-red-600 hover:underline cursor-pointer"
-                        >
-                          Remove Video
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <input
-                        type="text"
-                        value={videoUrl}
-                        onChange={(e) => setVideoUrl(e.target.value)}
-                        placeholder="Paste video URL (.mp4 / .webm) or click Upload Video..."
-                        className="flex-1 px-3 py-2 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-lg text-xs text-[#1C1310] focus:outline-none focus:bg-white focus:border-[#1C1310]"
-                      />
-                      <input
-                        ref={outfitVideoInputRef}
-                        type="file"
-                        accept="video/mp4,video/webm,video/quicktime,video/*"
-                        onChange={handleOutfitVideoUpload}
-                        className="hidden"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => outfitVideoInputRef.current?.click()}
-                        disabled={uploadingSlot !== null}
-                        className="px-3.5 py-2 rounded-lg border border-[#1C1310]/15 bg-[#FAF8F5] hover:bg-white text-xs font-semibold text-[#1C1310] inline-flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
-                      >
-                        <Upload className="w-3.5 h-3.5 text-[#E85D24]" />
-                        <span>
-                          {uploadingSlot === 'video' ? 'Uploading Video...' : 'Upload 1 Video'}
-                        </span>
-                      </button>
-                    </div>
+                  <div className="space-y-1">
+                    <span className="font-editorial text-2xl font-semibold text-[#4A1525] block">
+                      Add New Lehenga Listing
+                    </span>
+                    <span className="text-xs text-[#4A1525]/65 block max-w-xs">
+                      Click to add a new 3:4 card to this grid and upload its looping video, 4
+                      photos, title, and daily rent.
+                    </span>
                   </div>
-                </div>
+                </button>
               </div>
             </div>
-
-            {/* Copy Templates */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70">
-                  Description & Styling Note
-                </label>
-                <div className="flex flex-wrap gap-1.5">
-                  {HUMOR_TEMPLATES.map((tpl) => (
-                    <button
-                      key={tpl.label}
-                      type="button"
-                      onClick={() => {
-                        setDescription(tpl.description);
-                        setOgHumorTagline(tpl.ogTagline);
-                      }}
-                      className="px-2.5 py-1 rounded-md bg-[#FAF8F5] hover:bg-[#1C1310] hover:text-white text-[10px] font-medium text-[#1C1310]/75 transition-colors cursor-pointer"
-                    >
-                      {tpl.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <textarea
-                rows={3}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="w-full p-3.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310] focus:outline-none focus:bg-white focus:border-[#1C1310]"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
-                Available Sizes (comma separated)
-              </label>
-              <input
-                type="text"
-                value={sizesInput}
-                onChange={(e) => setSizesInput(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310]"
-              />
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-3.5 px-6 rounded-xl bg-[#1C1310] text-white text-xs uppercase tracking-[0.16em] font-semibold hover:bg-[#E85D24] transition-colors flex items-center justify-center gap-2 cursor-pointer"
-            >
-              {editingOutfitId ? (
-                <>
-                  <Save className="w-4 h-4" />
-                  <span>Save Changes to Lehenga</span>
-                </>
-              ) : (
-                <>
-                  <Plus className="w-4 h-4" />
-                  <span>Publish Lehenga to Storefront</span>
-                </>
-              )}
-            </button>
-          </form>
-
-          {/* Right: Active Catalog List with Edit & Delete */}
-          <div className="lg:col-span-5 bg-white rounded-2xl p-6 border border-[#1C1310]/10 shadow-xs space-y-4">
-            <div className="flex items-center justify-between border-b border-[#1C1310]/8 pb-3">
-              <div>
-                <h3 className="font-editorial text-2xl font-semibold text-[#1C1310]">
-                  Live Lehengas ({outfits.length})
-                </h3>
-                <p className="text-[11px] text-[#1C1310]/55">
-                  Click the pencil icon on any lehenga to edit its 4 photos, video, occasion, or
-                  price.
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-3 max-h-[560px] overflow-y-auto luxury-scroll pr-1">
-              {outfits.map((item) => {
-                const imgCount =
-                  Array.isArray(item.images) && item.images.length > 0
-                    ? item.images.length
-                    : item.mediaType === 'image'
-                    ? 1
-                    : 0;
-                const hasVideo = Boolean(item.videoUrl || item.mediaType === 'video');
-                return (
-                  <div
-                    key={item.id}
-                    className={`flex items-center gap-3.5 p-3 rounded-xl border transition-colors ${
-                      editingOutfitId === item.id
-                        ? 'bg-[#FFF5EE] border-[#E85D24]'
-                        : 'bg-[#FAF8F5] border-[#1C1310]/8'
-                    }`}
-                  >
-                    {item.mediaType === 'video' && (!item.images || item.images.length === 0) ? (
-                      <video
-                        src={item.videoUrl || item.mediaUrl}
-                        className="w-14 h-18 rounded-lg object-cover bg-[#EFECE6] shrink-0"
-                        muted
-                      />
-                    ) : (
-                      <img
-                        src={(item.images && item.images[0]) || item.mediaUrl}
-                        alt={item.title}
-                        className="w-14 h-18 rounded-lg object-cover object-top bg-[#EFECE6] shrink-0"
-                      />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-mono-num font-semibold text-[#E85D24]">
-                          {item.code}
-                        </span>
-                        <span className="text-[10px] text-[#1C1310]/50 truncate">
-                          • {item.vibeCategory}
-                        </span>
-                      </div>
-                      <h4 className="font-editorial text-lg font-semibold text-[#1C1310] truncate">
-                        {item.title}
-                      </h4>
-                      <p className="text-xs text-[#1C1310]/65">
-                        ₹{item.pricePerDay.toLocaleString('en-IN')}/day •{' '}
-                        <span className="text-[10px] text-[#1C1310]/50">
-                          {imgCount} photo{imgCount === 1 ? '' : 's'}
-                          {hasVideo ? ' + 1 video' : ''}
-                        </span>
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => startEditingOutfit(item)}
-                        title="Edit lehenga photo/details"
-                        className="p-2 rounded-lg text-[#1C1310]/65 hover:text-[#E85D24] hover:bg-white transition-colors cursor-pointer"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onDeleteOutfit(item.id)}
-                        title="Remove outfit"
-                        className="p-2 rounded-lg text-[#1C1310]/45 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+          )}
+        </>
       )}
 
       {/* TAB 2: HERO BANNER VIDEO & IMAGE MANAGER */}
       {activeTab === 'banner' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-          <div className="lg:col-span-6 bg-white rounded-2xl p-6 sm:p-8 border border-[#1C1310]/10 shadow-xs space-y-6">
-            <div className="border-b border-[#1C1310]/8 pb-4">
-              <h2 className="font-editorial text-2xl font-semibold text-[#1C1310]">
+          <div className="lg:col-span-6 bg-white rounded-2xl p-6 sm:p-8 border border-[#F8BBD0] shadow-xs space-y-6">
+            <div className="border-b border-[#FCE4EC] pb-4">
+              <h2 className="font-editorial text-2xl font-semibold text-[#4A1525]">
                 Hero Banner Video & Image Settings
               </h2>
-              <p className="text-xs text-[#1C1310]/60 mt-1">
-                Upload your muted looping `.mp4` banner video or static banner image here. Customers
-                will only see the clean full-screen banner on the frontend.
+              <p className="text-xs text-[#4A1525]/65 mt-1">
+                Upload your muted looping `.mp4` banner video or static banner image here.
               </p>
             </div>
 
-            {/* Banner Type Switcher */}
             <div>
-              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-2">
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/70 mb-2">
                 Active Hero Banner Mode
               </label>
               <div className="grid grid-cols-2 gap-3">
@@ -874,11 +1722,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   }
                   className={`py-3 px-4 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer ${
                     draftSettings.heroMediaType === 'video'
-                      ? 'bg-[#1C1310] text-white border-[#1C1310]'
-                      : 'bg-[#FAF8F5] text-[#1C1310]/70 border-[#1C1310]/15'
+                      ? 'bg-[#D81B60] text-white border-[#D81B60]'
+                      : 'bg-[#FFF5F8] text-[#4A1525]/75 border-[#F8BBD0]'
                   }`}
                 >
-                  <Film className="w-4 h-4 text-[#E85D24]" />
+                  <Film className="w-4 h-4" />
                   <span>Muted Video Banner (.mp4)</span>
                 </button>
                 <button
@@ -891,19 +1739,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   }
                   className={`py-3 px-4 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer ${
                     draftSettings.heroMediaType === 'image'
-                      ? 'bg-[#1C1310] text-white border-[#1C1310]'
-                      : 'bg-[#FAF8F5] text-[#1C1310]/70 border-[#1C1310]/15'
+                      ? 'bg-[#D81B60] text-white border-[#D81B60]'
+                      : 'bg-[#FFF5F8] text-[#4A1525]/75 border-[#F8BBD0]'
                   }`}
                 >
-                  <ImageIcon className="w-4 h-4 text-[#E85D24]" />
+                  <ImageIcon className="w-4 h-4" />
                   <span>Static Image Banner</span>
                 </button>
               </div>
             </div>
 
-            {/* Upload Hero Video (.mp4) */}
-            <div className="space-y-2 pt-2 border-t border-[#1C1310]/8">
-              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70">
+            <div className="space-y-2 pt-2 border-t border-[#FCE4EC]">
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/70">
                 Hero Banner Video (`.mp4` / `.webm`)
               </label>
               <div className="flex flex-col sm:flex-row gap-2.5">
@@ -914,7 +1761,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     setDraftSettings({ ...draftSettings, heroVideoUrl: e.target.value })
                   }
                   placeholder="/uploads/hero-banner.mp4"
-                  className="flex-1 px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310]"
+                  className="flex-1 px-3.5 py-2.5 bg-[#FFF5F8] border border-[#F8BBD0] rounded-xl text-xs text-[#4A1525]"
                 />
                 <input
                   ref={heroVideoInputRef}
@@ -940,7 +1787,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   type="button"
                   onClick={() => heroVideoInputRef.current?.click()}
                   disabled={isSavingSettings}
-                  className="px-4 py-2.5 rounded-xl bg-[#E85D24] hover:bg-[#d14e17] text-white text-xs font-semibold inline-flex items-center justify-center gap-2 cursor-pointer shrink-0"
+                  className="px-4 py-2.5 rounded-xl bg-[#D81B60] hover:bg-[#AD1457] text-white text-xs font-semibold inline-flex items-center justify-center gap-2 cursor-pointer shrink-0"
                 >
                   <Upload className="w-3.5 h-3.5" />
                   <span>{isSavingSettings ? 'Uploading...' : 'Upload MP4 Video'}</span>
@@ -948,9 +1795,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
-            {/* Upload Hero Poster / Static Banner Image */}
-            <div className="space-y-2 pt-2 border-t border-[#1C1310]/8">
-              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70">
+            <div className="space-y-2 pt-2 border-t border-[#FCE4EC]">
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/70">
                 Hero Banner Image / Video Poster (`.jpg` / `.png` / `.webp`)
               </label>
               <div className="flex flex-col sm:flex-row gap-2.5">
@@ -961,7 +1807,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     setDraftSettings({ ...draftSettings, heroPosterUrl: e.target.value })
                   }
                   placeholder="/uploads/hero-poster.jpg"
-                  className="flex-1 px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310]"
+                  className="flex-1 px-3.5 py-2.5 bg-[#FFF5F8] border border-[#F8BBD0] rounded-xl text-xs text-[#4A1525]"
                 />
                 <input
                   ref={heroPosterInputRef}
@@ -986,9 +1832,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => heroPosterInputRef.current?.click()}
-                  className="px-4 py-2.5 rounded-xl border border-[#1C1310]/15 bg-[#FAF8F5] hover:bg-white text-xs font-semibold text-[#1C1310] inline-flex items-center justify-center gap-2 cursor-pointer shrink-0"
+                  className="px-4 py-2.5 rounded-xl border border-[#F8BBD0] bg-[#FFF5F8] hover:bg-white text-xs font-semibold text-[#4A1525] inline-flex items-center justify-center gap-2 cursor-pointer shrink-0"
                 >
-                  <Upload className="w-3.5 h-3.5 text-[#E85D24]" />
+                  <Upload className="w-3.5 h-3.5 text-[#D81B60]" />
                   <span>Upload Banner Image</span>
                 </button>
               </div>
@@ -999,24 +1845,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               onClick={() =>
                 handleSaveSettings(draftSettings, 'Saved Hero Banner settings to live storefront!')
               }
-              className="w-full py-3.5 px-6 rounded-xl bg-[#1C1310] text-white text-xs uppercase tracking-[0.16em] font-semibold hover:bg-[#E85D24] transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full py-3.5 px-6 rounded-xl bg-[#4A1525] text-white text-xs uppercase tracking-[0.16em] font-semibold hover:bg-[#D81B60] transition-colors flex items-center justify-center gap-2 cursor-pointer"
             >
               <Save className="w-4 h-4" />
               <span>Save Banner Settings</span>
             </button>
           </div>
 
-          {/* Right: Live Preview of Hero Banner */}
-          <div className="lg:col-span-6 bg-white rounded-2xl p-6 border border-[#1C1310]/10 shadow-xs space-y-4">
+          <div className="lg:col-span-6 bg-white rounded-2xl p-6 border border-[#F8BBD0] shadow-xs space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="font-editorial text-2xl font-semibold text-[#1C1310]">
+              <h3 className="font-editorial text-2xl font-semibold text-[#4A1525]">
                 Live Hero Banner Preview
               </h3>
-              <span className="text-[11px] uppercase tracking-wider font-semibold text-[#E85D24]">
+              <span className="text-[11px] uppercase tracking-wider font-semibold text-[#D81B60]">
                 {draftSettings.heroMediaType === 'video' ? 'Playing Video Loop' : 'Static Image'}
               </span>
             </div>
-            <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-[#2B180A] border border-[#1C1310]/15">
+            <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-[#2B180A] border border-[#F8BBD0]">
               {draftSettings.heroMediaType === 'image' ? (
                 <img
                   src={draftSettings.heroPosterUrl}
@@ -1043,13 +1888,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* TAB 3: TOP & BOTTOM LOGOS & BRAND IDENTITY */}
       {activeTab === 'branding' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-          <div className="lg:col-span-7 bg-white rounded-2xl p-6 sm:p-8 border border-[#1C1310]/10 shadow-xs space-y-6">
-            <div className="flex items-center justify-between border-b border-[#1C1310]/8 pb-4">
+          <div className="lg:col-span-7 bg-white rounded-2xl p-6 sm:p-8 border border-[#F8BBD0] shadow-xs space-y-6">
+            <div className="flex items-center justify-between border-b border-[#FCE4EC] pb-4">
               <div>
-                <h2 className="font-editorial text-2xl font-semibold text-[#1C1310]">
+                <h2 className="font-editorial text-2xl font-semibold text-[#4A1525]">
                   Top & Bottom Logos & Studio Identity
                 </h2>
-                <p className="text-xs text-[#1C1310]/60 mt-1">
+                <p className="text-xs text-[#4A1525]/65 mt-1">
                   Upload custom logo images for the top navigation bar and bottom footer, or edit
                   the brand text and WhatsApp concierge details.
                 </p>
@@ -1062,7 +1907,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     'Reset logos and branding to default settings.'
                   )
                 }
-                className="text-xs text-[#1C1310]/60 hover:text-[#1C1310] underline cursor-pointer"
+                className="text-xs text-[#D81B60] hover:underline cursor-pointer"
               >
                 Reset Defaults
               </button>
@@ -1070,8 +1915,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             {/* Top Navbar Logo Upload */}
             <div className="space-y-3">
-              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70">
-                Top Navbar Logo Image (Leave empty to use Gold Text Lockup `लोल | LOL COUTURE`)
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/70">
+                Top Navbar Logo Image
               </label>
               <div className="flex flex-col sm:flex-row gap-2.5">
                 <input
@@ -1081,7 +1926,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     setDraftSettings({ ...draftSettings, topLogoUrl: e.target.value })
                   }
                   placeholder="Upload custom top logo PNG/SVG or leave empty for default..."
-                  className="flex-1 px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310]"
+                  className="flex-1 px-3.5 py-2.5 bg-[#FFF5F8] border border-[#F8BBD0] rounded-xl text-xs text-[#4A1525]"
                 />
                 <input
                   ref={topLogoInputRef}
@@ -1098,9 +1943,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => topLogoInputRef.current?.click()}
-                  className="px-4 py-2.5 rounded-xl border border-[#1C1310]/15 bg-[#FAF8F5] hover:bg-white text-xs font-semibold text-[#1C1310] inline-flex items-center gap-2 cursor-pointer shrink-0"
+                  className="px-4 py-2.5 rounded-xl border border-[#F8BBD0] bg-[#FFF5F8] hover:bg-white text-xs font-semibold text-[#4A1525] inline-flex items-center gap-2 cursor-pointer shrink-0"
                 >
-                  <Upload className="w-3.5 h-3.5 text-[#E85D24]" />
+                  <Upload className="w-3.5 h-3.5 text-[#D81B60]" />
                   <span>Upload Top Logo</span>
                 </button>
                 {draftSettings.topLogoUrl && (
@@ -1114,38 +1959,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 )}
               </div>
 
-              {/* Top Logo Size Slider & Presets */}
-              <div className="p-3.5 rounded-xl bg-[#FAF8F5] border border-[#1C1310]/10 space-y-2">
+              <div className="p-3.5 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0] space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/75">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/75">
                     Top Logo Size (Height):{' '}
-                    <strong className="text-[#E85D24] font-mono-num">
+                    <strong className="text-[#D81B60] font-mono-num">
                       {draftSettings.topLogoHeight || 56}px
                     </strong>
                   </span>
-                  <div className="flex items-center gap-1.5">
-                    {[
-                      { label: 'S (36px)', val: 36 },
-                      { label: 'M (56px)', val: 56 },
-                      { label: 'L (76px)', val: 76 },
-                      { label: 'XL (100px)', val: 100 },
-                    ].map((preset) => (
-                      <button
-                        key={preset.val}
-                        type="button"
-                        onClick={() =>
-                          setDraftSettings({ ...draftSettings, topLogoHeight: preset.val })
-                        }
-                        className={`px-2 py-1 rounded text-[10px] font-semibold transition-colors cursor-pointer ${
-                          (draftSettings.topLogoHeight || 56) === preset.val
-                            ? 'bg-[#1C1310] text-white'
-                            : 'bg-white text-[#1C1310]/70 border border-[#1C1310]/12 hover:text-[#1C1310]'
-                        }`}
-                      >
-                        {preset.label}
-                      </button>
-                    ))}
-                  </div>
                 </div>
                 <div className="flex items-center gap-3">
                   <input
@@ -1160,29 +1981,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         topLogoHeight: Number(e.target.value),
                       })
                     }
-                    className="flex-1 accent-[#E85D24] cursor-pointer"
-                  />
-                  <input
-                    type="number"
-                    min={20}
-                    max={200}
-                    value={draftSettings.topLogoHeight || 56}
-                    onChange={(e) =>
-                      setDraftSettings({
-                        ...draftSettings,
-                        topLogoHeight: Math.max(20, Math.min(200, Number(e.target.value) || 56)),
-                      })
-                    }
-                    className="w-16 px-2 py-1 bg-white border border-[#1C1310]/15 rounded-lg text-xs font-mono-num text-center text-[#1C1310]"
+                    className="flex-1 accent-[#D81B60] cursor-pointer"
                   />
                 </div>
               </div>
             </div>
 
-            {/* Top Brand Text Lockup Fields */}
+            {/* Brand Text Lockup Fields */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/70 mb-1.5">
                   Hindi / Emblem Mark
                 </label>
                 <input
@@ -1191,11 +1999,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onChange={(e) =>
                     setDraftSettings({ ...draftSettings, brandHindiMark: e.target.value })
                   }
-                  className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310]"
+                  className="w-full px-3.5 py-2.5 bg-[#FFF5F8] border border-[#F8BBD0] rounded-xl text-xs text-[#4A1525]"
                 />
               </div>
               <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/70 mb-1.5">
                   Top Brand Title
                 </label>
                 <input
@@ -1204,11 +2012,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onChange={(e) =>
                     setDraftSettings({ ...draftSettings, brandTitle: e.target.value })
                   }
-                  className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310]"
+                  className="w-full px-3.5 py-2.5 bg-[#FFF5F8] border border-[#F8BBD0] rounded-xl text-xs text-[#4A1525]"
                 />
               </div>
               <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/70 mb-1.5">
                   Top Brand Subtitle
                 </label>
                 <input
@@ -1217,15 +2025,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onChange={(e) =>
                     setDraftSettings({ ...draftSettings, brandSubtitle: e.target.value })
                   }
-                  className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310]"
+                  className="w-full px-3.5 py-2.5 bg-[#FFF5F8] border border-[#F8BBD0] rounded-xl text-xs text-[#4A1525]"
                 />
               </div>
             </div>
 
             {/* Bottom Footer Logo Upload */}
-            <div className="space-y-3 pt-3 border-t border-[#1C1310]/8">
-              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70">
-                Bottom Footer Logo Image (Leave empty to use Official LOL By Sanjeevani Vector Logo)
+            <div className="space-y-3 pt-3 border-t border-[#FCE4EC]">
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/70">
+                Bottom Footer Logo Image
               </label>
               <div className="flex flex-col sm:flex-row gap-2.5">
                 <input
@@ -1234,8 +2042,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onChange={(e) =>
                     setDraftSettings({ ...draftSettings, bottomLogoUrl: e.target.value })
                   }
-                  placeholder="Upload custom bottom footer logo or leave empty for official vector logo..."
-                  className="flex-1 px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310]"
+                  placeholder="Upload custom bottom footer logo or leave empty for default..."
+                  className="flex-1 px-3.5 py-2.5 bg-[#FFF5F8] border border-[#F8BBD0] rounded-xl text-xs text-[#4A1525]"
                 />
                 <input
                   ref={bottomLogoInputRef}
@@ -1252,9 +2060,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => bottomLogoInputRef.current?.click()}
-                  className="px-4 py-2.5 rounded-xl border border-[#1C1310]/15 bg-[#FAF8F5] hover:bg-white text-xs font-semibold text-[#1C1310] inline-flex items-center gap-2 cursor-pointer shrink-0"
+                  className="px-4 py-2.5 rounded-xl border border-[#F8BBD0] bg-[#FFF5F8] hover:bg-white text-xs font-semibold text-[#4A1525] inline-flex items-center gap-2 cursor-pointer shrink-0"
                 >
-                  <Upload className="w-3.5 h-3.5 text-[#E85D24]" />
+                  <Upload className="w-3.5 h-3.5 text-[#D81B60]" />
                   <span>Upload Bottom Logo</span>
                 </button>
                 {draftSettings.bottomLogoUrl && (
@@ -1267,76 +2075,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </button>
                 )}
               </div>
-
-              {/* Bottom Logo Size Slider & Presets */}
-              <div className="p-3.5 rounded-xl bg-[#FAF8F5] border border-[#1C1310]/10 space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/75">
-                    Bottom Logo Size (Height):{' '}
-                    <strong className="text-[#E85D24] font-mono-num">
-                      {draftSettings.bottomLogoHeight || 88}px
-                    </strong>
-                  </span>
-                  <div className="flex items-center gap-1.5">
-                    {[
-                      { label: 'S (56px)', val: 56 },
-                      { label: 'M (88px)', val: 88 },
-                      { label: 'L (120px)', val: 120 },
-                      { label: 'XL (160px)', val: 160 },
-                    ].map((preset) => (
-                      <button
-                        key={preset.val}
-                        type="button"
-                        onClick={() =>
-                          setDraftSettings({ ...draftSettings, bottomLogoHeight: preset.val })
-                        }
-                        className={`px-2 py-1 rounded text-[10px] font-semibold transition-colors cursor-pointer ${
-                          (draftSettings.bottomLogoHeight || 88) === preset.val
-                            ? 'bg-[#1C1310] text-white'
-                            : 'bg-white text-[#1C1310]/70 border border-[#1C1310]/12 hover:text-[#1C1310]'
-                        }`}
-                      >
-                        {preset.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="range"
-                    min={36}
-                    max={200}
-                    step={2}
-                    value={draftSettings.bottomLogoHeight || 88}
-                    onChange={(e) =>
-                      setDraftSettings({
-                        ...draftSettings,
-                        bottomLogoHeight: Number(e.target.value),
-                      })
-                    }
-                    className="flex-1 accent-[#E85D24] cursor-pointer"
-                  />
-                  <input
-                    type="number"
-                    min={30}
-                    max={260}
-                    value={draftSettings.bottomLogoHeight || 88}
-                    onChange={(e) =>
-                      setDraftSettings({
-                        ...draftSettings,
-                        bottomLogoHeight: Math.max(30, Math.min(260, Number(e.target.value) || 88)),
-                      })
-                    }
-                    className="w-16 px-2 py-1 bg-white border border-[#1C1310]/15 rounded-lg text-xs font-mono-num text-center text-[#1C1310]"
-                  />
-                </div>
-              </div>
             </div>
 
-            {/* Footer Bio, Location & WhatsApp */}
-            <div className="space-y-3 pt-3 border-t border-[#1C1310]/8">
+            {/* Footer Bio, Curated Collection, Location & WhatsApp */}
+            <div className="space-y-3 pt-3 border-t border-[#FCE4EC]">
               <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/70 mb-1.5">
+                  Curated Collection Title (Footer & Storefront)
+                </label>
+                <input
+                  type="text"
+                  value={draftSettings.curatedCollectionTitle ?? 'Navratri Ni Pehvesh'}
+                  onChange={(e) =>
+                    setDraftSettings({
+                      ...draftSettings,
+                      curatedCollectionTitle: e.target.value,
+                    })
+                  }
+                  className="w-full px-3.5 py-2.5 bg-[#FFF5F8] border border-[#F8BBD0] rounded-xl text-xs text-[#4A1525]"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/70 mb-1.5">
                   Footer Brand Description
                 </label>
                 <textarea
@@ -1345,12 +2105,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onChange={(e) =>
                     setDraftSettings({ ...draftSettings, footerDescription: e.target.value })
                   }
-                  className="w-full p-3 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310]"
+                  className="w-full p-3 bg-[#FFF5F8] border border-[#F8BBD0] rounded-xl text-xs text-[#4A1525]"
                 />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/70 mb-1.5">
                     Studio Address / Location
                   </label>
                   <input
@@ -1359,11 +2119,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     onChange={(e) =>
                       setDraftSettings({ ...draftSettings, studioLocation: e.target.value })
                     }
-                    className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310]"
+                    className="w-full px-3.5 py-2.5 bg-[#FFF5F8] border border-[#F8BBD0] rounded-xl text-xs text-[#4A1525]"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/70 mb-1.5">
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/70 mb-1.5">
                     WhatsApp Concierge Number
                   </label>
                   <input
@@ -1372,7 +2132,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     onChange={(e) =>
                       setDraftSettings({ ...draftSettings, whatsappNumber: e.target.value })
                     }
-                    className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310]"
+                    className="w-full px-3.5 py-2.5 bg-[#FFF5F8] border border-[#F8BBD0] rounded-xl text-xs text-[#4A1525]"
                   />
                 </div>
               </div>
@@ -1386,88 +2146,56 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   'Saved Top & Bottom Logos and Brand Identity to live storefront!'
                 )
               }
-              className="w-full py-3.5 px-6 rounded-xl bg-[#1C1310] text-white text-xs uppercase tracking-[0.16em] font-semibold hover:bg-[#E85D24] transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full py-3.5 px-6 rounded-xl bg-[#4A1525] text-white text-xs uppercase tracking-[0.16em] font-semibold hover:bg-[#D81B60] transition-colors flex items-center justify-center gap-2 cursor-pointer"
             >
               <Save className="w-4 h-4" />
               <span>Save Branding & Logos</span>
             </button>
           </div>
 
-          {/* Right: Live Preview of Top & Bottom Logos */}
           <div className="lg:col-span-5 space-y-6">
-            <div className="bg-[#1C1310] rounded-2xl p-6 text-white space-y-3">
+            <div className="bg-white rounded-2xl p-6 border border-[#F8BBD0] space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase tracking-widest text-[#F5A623] font-semibold">
+                <span className="text-[10px] uppercase tracking-widest text-[#D81B60] font-semibold">
                   Top Navbar Logo Preview
                 </span>
-                <span className="text-[10px] font-mono-num text-white/60">
+                <span className="text-[10px] font-mono-num text-[#4A1525]/60">
                   Height: {draftSettings.topLogoHeight || 56}px
                 </span>
               </div>
-              <div className="p-4 rounded-xl bg-black/40 border border-white/10 flex items-center gap-3 overflow-hidden">
+              <div className="p-4 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0] flex items-center gap-3 overflow-hidden">
                 {draftSettings.topLogoUrl ? (
                   <img
                     src={draftSettings.topLogoUrl}
                     alt="Top Logo Preview"
                     style={{ height: `${draftSettings.topLogoHeight || 56}px` }}
-                    className="w-auto object-contain transition-all duration-150"
+                    className="w-auto object-contain"
                   />
                 ) : (
-                  <div
-                    className="flex items-center gap-2.5 origin-left transition-transform duration-150"
-                    style={{
-                      transform: `scale(${(draftSettings.topLogoHeight || 56) / 48})`,
-                    }}
-                  >
-                    <span
-                      className="text-3xl font-bold tracking-tight text-[#F5A623]"
-                      style={{ fontFamily: "'Oswald', sans-serif" }}
-                    >
-                      {draftSettings.brandHindiMark || 'लोल'}
-                    </span>
-                    <span className="h-6 w-[1.5px] bg-[#F5A623]/70" />
-                    <div className="flex flex-col">
-                      <span
-                        className="text-2xl font-bold tracking-[0.14em] text-[#F5A623] leading-none"
-                        style={{ fontFamily: "'Oswald', sans-serif" }}
-                      >
-                        {draftSettings.brandTitle || 'LOL COUTURE'}
-                      </span>
-                      <span className="text-[9px] tracking-[0.22em] uppercase text-white/80 mt-0.5">
-                        {draftSettings.brandSubtitle || 'By Sanjeevani • Indore'}
-                      </span>
-                    </div>
-                  </div>
+                  <LolBrandLogo variant="navbar" />
                 )}
               </div>
             </div>
 
-            <div className="bg-[#1C1310] rounded-2xl p-6 text-white space-y-3">
+            <div className="bg-white rounded-2xl p-6 border border-[#F8BBD0] space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase tracking-widest text-[#F5A623] font-semibold">
+                <span className="text-[10px] uppercase tracking-widest text-[#D81B60] font-semibold">
                   Bottom Footer Logo Preview
                 </span>
-                <span className="text-[10px] font-mono-num text-white/60">
+                <span className="text-[10px] font-mono-num text-[#4A1525]/60">
                   Height: {draftSettings.bottomLogoHeight || 88}px
                 </span>
               </div>
-              <div className="p-5 rounded-xl bg-white/95 text-[#1C1310] flex flex-col items-center justify-center overflow-hidden">
+              <div className="p-5 rounded-xl bg-[#FCE4EC] text-[#4A1525] flex flex-col items-center justify-center overflow-hidden">
                 {draftSettings.bottomLogoUrl ? (
                   <img
                     src={draftSettings.bottomLogoUrl}
                     alt="Bottom Logo Preview"
                     style={{ height: `${draftSettings.bottomLogoHeight || 88}px` }}
-                    className="w-auto object-contain transition-all duration-150"
+                    className="w-auto object-contain"
                   />
                 ) : (
-                  <div
-                    className="transition-transform duration-150"
-                    style={{
-                      transform: `scale(${(draftSettings.bottomLogoHeight || 88) / 88})`,
-                    }}
-                  >
-                    <LolBrandLogo variant="full" />
-                  </div>
+                  <LolBrandLogo variant="full" />
                 )}
               </div>
             </div>

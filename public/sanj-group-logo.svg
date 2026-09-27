@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 260" fill="none">
+  <!-- Two Red Footprints above 'nj' -->
+  <!-- Left Footprint -->
+  <g fill="#D62429">
+    <!-- Left foot sole -->
+    <path d="M303 82c-9 2-15 11-13 21 2 9 8 17 11 26 2 7 3 15 8 19 5 4 13 2 15-4 2-6-1-13-2-19-1-8 4-16 3-25-1-11-11-20-22-18z"/>
+    <!-- Left foot toes (big toe on right side of left foot) -->
+    <ellipse cx="322" cy="69" rx="6" ry="8" transform="rotate(-10 322 69)"/>
+    <ellipse cx="310" cy="68" rx="4.2" ry="5.8" transform="rotate(-15 310 68)"/>
+    <ellipse cx="301" cy="72" rx="3.6" ry="5" transform="rotate(-20 301 72)"/>
+    <ellipse cx="294" cy="78" rx="3" ry="4.2" transform="rotate(-25 294 78)"/>
+    <ellipse cx="289" cy="85" rx="2.5" ry="3.5" transform="rotate(-30 289 85)"/>
+
+    <!-- Right Footprint (slightly lower and to the right) -->
+    <path d="M356 101c9 2 15 11 13 21-2 9-8 17-11 26-2 7-3 15-8 19-5 4-13 2-15-4-2-6 1-13 2-19 1-8-4-16-3-25 1-11 11-20 22-18z"/>
+    <!-- Right foot toes (big toe on left side of right foot) -->
+    <ellipse cx="338" cy="89" rx="6" ry="8" transform="rotate(10 338 89)"/>
+    <ellipse cx="350" cy="88" rx="4.2" ry="5.8" transform="rotate(15 350 88)"/>
+    <ellipse cx="359" cy="92" rx="3.6" ry="5" transform="rotate(20 359 92)"/>
+    <ellipse cx="366" cy="98" rx="3" ry="4.2" transform="rotate(25 366 98)"/>
+    <ellipse cx="371" cy="105" rx="2.5" ry="3.5" transform="rotate(30 371 105)"/>
+  </g>
+
+  <!-- Calligraphic 'S' -->
+  <path
+    d="M204 97c17 1 28-10 26-22-2-14-21-24-48-24-39 0-76 21-76 47 0 23 26 30 56 36 27 5 46 14 43 35-4 27-40 46-88 46-38 0-69-14-75-38-4-16 2-32 11-32 8 0 12 14 16 31 5 20 17 39 39 47"
+    stroke="#0A0A0A"
+    stroke-width="11"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Calligraphic 'anj' -->
+  <path
+    d="M251 141c-16 2-36 18-39 33-2 9 4 13 12 9 11-6 23-22 30-37l-8 34c-2 8 3 11 9 6 10-8 24-25 32-38l-16 47c4-14 21-38 34-39 8-1 10 6 8 15-3 12-1 19 6 19 9 0 21-12 31-26l-37 101c-6 17-14 25-18 22-4-3-1-15 6-27 14-24 46-52 84-78"
+    stroke="#0A0A0A"
+    stroke-width="9.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- 'Group of properties.' in classic serif -->
+  <text
+    x="38"
+    y="228"
+    fill="#0A0A0A"
+    font-family="Georgia, 'Times New Roman', serif"
+    font-size="31"
+    letter-spacing="0.2"
+  >
+    Group of properties.
+  </text>
+</svg>

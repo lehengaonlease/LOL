@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Heart, Share2, Eye, Film } from 'lucide-react';
 import { LehengaOutfit } from '../types';
 
@@ -19,24 +19,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   isWishlisted,
   onToggleWishlist,
 }) => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
   const mediaItems = useMemo(() => {
     const items: { type: 'image' | 'video'; url: string; label: string }[] = [];
-    const imgs =
-      Array.isArray(outfit.images) && outfit.images.length > 0
-        ? outfit.images.filter(Boolean).slice(0, 4)
-        : outfit.mediaType === 'image' && outfit.mediaUrl
-        ? [outfit.mediaUrl]
-        : [];
 
-    imgs.forEach((url, idx) => {
-      items.push({
-        type: 'image',
-        url,
-        label: imgs.length > 1 ? `Photo ${idx + 1}` : 'Photo',
-      });
-    });
-
-    const vid = outfit.videoUrl || (outfit.mediaType === 'video' ? outfit.mediaUrl : '');
+    // If a video is selected for this listing, it is the primary thumbnail (index 0); otherwise Photo 1 is the main thumbnail
+    const vid = (outfit.videoUrl || (outfit.mediaType === 'video' ? outfit.mediaUrl : '')).trim();
     if (vid) {
       items.push({
         type: 'video',
@@ -45,11 +34,29 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       });
     }
 
-    if (items.length === 0) {
+    const imgs =
+      Array.isArray(outfit.images) && outfit.images.length > 0
+        ? outfit.images.map((s) => s.trim()).filter(Boolean).slice(0, 4)
+        : outfit.mediaType === 'image' && outfit.mediaUrl
+        ? [outfit.mediaUrl]
+        : [];
+
+    imgs.forEach((url, idx) => {
       items.push({
         type: 'image',
-        url: outfit.mediaUrl || '/images/lehenga-orange-zardosi.jpg',
-        label: 'Photo',
+        url,
+        label: imgs.length > 1 ? `Photo ${idx + 1}` : 'Photo 1',
+      });
+    });
+
+    if (items.length === 0) {
+      const fallbackPhoto =
+        (outfit.mediaType === 'image' && outfit.mediaUrl ? outfit.mediaUrl : '') ||
+        '/images/lehenga-orange-zardosi.jpg';
+      items.push({
+        type: 'image',
+        url: fallbackPhoto,
+        label: 'Photo 1',
       });
     }
 
@@ -57,7 +64,32 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   }, [outfit]);
 
   const [activeMediaIndex, setActiveMediaIndex] = useState(0);
+
+  // Reset to primary thumbnail (video if present) when outfit changes
+  useEffect(() => {
+    setActiveMediaIndex(0);
+  }, [outfit.id, outfit.videoUrl, outfit.mediaUrl]);
+
   const currentMedia = mediaItems[activeMediaIndex] || mediaItems[0];
+
+  // Ensure video thumbnail on front grid is ALWAYS playing on loop without voice
+  useEffect(() => {
+    if (currentMedia.type !== 'video') return;
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+
+    videoEl.defaultMuted = true;
+    videoEl.muted = true;
+    videoEl.loop = true;
+    videoEl.playsInline = true;
+
+    const playVideo = () => {
+      videoEl.muted = true;
+      videoEl.play().catch(() => {});
+    };
+
+    playVideo();
+  }, [currentMedia]);
 
   return (
     <article className="group flex flex-col bg-white rounded-2xl overflow-hidden border border-[#F8BBD0]/60 hover:border-[#F48FB1] transition-all duration-300 hover:shadow-[0_16px_40px_-12px_rgba(216,27,96,0.14)]">
@@ -68,6 +100,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       >
         {currentMedia.type === 'video' ? (
           <video
+            ref={videoRef}
             key={currentMedia.url}
             src={currentMedia.url}
             className="w-full h-full object-cover object-top"
@@ -75,6 +108,15 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             muted
             loop
             playsInline
+            preload="auto"
+            onCanPlay={(e) => {
+              e.currentTarget.muted = true;
+              e.currentTarget.play().catch(() => {});
+            }}
+            onPause={(e) => {
+              e.currentTarget.muted = true;
+              e.currentTarget.play().catch(() => {});
+            }}
           />
         ) : (
           <img

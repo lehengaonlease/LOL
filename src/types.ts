@@ -34,23 +34,32 @@ export interface SiteSettings {
   footerDescription: string;
   studioLocation: string;
   whatsappNumber: string;
+  curatedCollectionTitle?: string;
+  catalogSectionKicker?: string;
+  catalogSectionTitle?: string;
+  catalogSectionSubtitle?: string;
 }
 
 export const DEFAULT_SITE_SETTINGS: SiteSettings = {
-  topLogoUrl: '',
-  bottomLogoUrl: '',
-  topLogoHeight: 56,
-  bottomLogoHeight: 88,
+  topLogoUrl: '/uploads/logo-top-1790531566115-6ys4f.png',
+  bottomLogoUrl: '/uploads/logo-bottom-1790531569272-mgmg7.png',
+  topLogoHeight: 74,
+  bottomLogoHeight: 200,
   brandHindiMark: 'लोल',
-  brandTitle: 'LOL COUTURE',
-  brandSubtitle: 'By Sanjeevani • Indore',
+  brandTitle: 'LOL',
+  brandSubtitle: 'Want it . Rent it',
   heroMediaType: 'video',
-  heroVideoUrl: '/uploads/hero-banner.mp4?v=garba-twirl-v3',
+  heroVideoUrl: '/uploads/hero-banner.mp4?t=1790531601705',
   heroPosterUrl: '/uploads/hero-poster.jpg',
   footerDescription:
-    'LOL (Lehenga On Lease) By Sanjeevani is Indore’s premier luxury bridal and festive wear rental studio. Wear ₹60,000+ designer silhouettes starting at ₹1,999/day.',
-  studioLocation: 'Vijay Nagar & Saket, Indore',
-  whatsappNumber: '919826000000',
+    'At LOL By Sanjeevani, we are entirely obsessed with making you look like a million bucks on and off the feed. Our collection is meticulously handpicked to deliver pure main-character energy for every grand wedding, sangeet night, and high-energy festival in Indore. We refresh our racks constantly, ensuring you always stay three steps ahead of the trends.',
+  studioLocation: 'Anantnath apartment, Silicon city, indore',
+  whatsappNumber: '7000861465',
+  curatedCollectionTitle: 'Navratri Ni Pehvesh',
+  catalogSectionKicker: '10/10 MANDAL VIBES ONLY',
+  catalogSectionTitle: 'The Garba Night Essentials',
+  catalogSectionSubtitle:
+    "Every piece is custom-fitted to survive your wildest Garba steps, Heavy mirror work, vibrant traditional prints, and massive custom-altered flares that demand a slow-mo reel. Sanitized, perfectly fitted to your waist, and ready to sweep Indore's biggest grounds.",
 };
 
 export interface RentalBooking {

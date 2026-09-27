@@ -9,6 +9,8 @@ import {
   Clock,
   Ruler,
   Lock,
+  HelpCircle,
+  Instagram,
 } from 'lucide-react';
 import { INITIAL_OUTFITS } from './data/initialOutfits';
 import { INITIAL_TESTIMONIALS } from './data/initialTestimonials';
@@ -31,6 +33,7 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { GoogleTasksDrawer } from './components/GoogleTasksDrawer';
 import { LolBrandLogo } from './components/LolBrandLogo';
 import { TestimonialSection } from './components/TestimonialSection';
+import { FaqModal } from './components/FaqModal';
 import {
   requestGoogleTasksToken,
   getStoredAccessToken,
@@ -97,7 +100,14 @@ export function App() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_SITE_SETTINGS);
       if (saved) {
-        return { ...DEFAULT_SITE_SETTINGS, ...JSON.parse(saved) };
+        const parsed = JSON.parse(saved);
+        if (
+          parsed.footerDescription &&
+          parsed.footerDescription.includes('High-energy Garbas, royal sangeets')
+        ) {
+          parsed.footerDescription = DEFAULT_SITE_SETTINGS.footerDescription;
+        }
+        return { ...DEFAULT_SITE_SETTINGS, ...parsed };
       }
     } catch {
       // ignore
@@ -221,6 +231,8 @@ export function App() {
 
   // Real-time (<1s) sync of outfits, site settings, and testimonials across tabs and server
   useEffect(() => {
+    const initialDefaultJson = JSON.stringify(INITIAL_OUTFITS);
+
     const fetchLatestOutfits = () => {
       fetch('/api/outfits')
         .then((res) => (res.ok ? res.json() : null))
@@ -229,6 +241,15 @@ export function App() {
             setOutfits((prev) => {
               const prevJson = JSON.stringify(prev);
               const nextJson = JSON.stringify(data);
+              // If the server just cold-started with default INITIAL_OUTFITS while localStorage has user-customized outfits, restore localStorage to server
+              if (nextJson === initialDefaultJson && prevJson !== initialDefaultJson) {
+                fetch('/api/outfits/sync', {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ outfits: prev }),
+                }).catch(() => {});
+                return prev;
+              }
               if (prevJson !== nextJson) {
                 try {
                   localStorage.setItem(STORAGE_KEY_OUTFITS, nextJson);
@@ -287,6 +308,16 @@ export function App() {
           const parsed = JSON.parse(e.newValue);
           if (Array.isArray(parsed)) {
             setOutfits(parsed);
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (e.key === STORAGE_KEY_SITE_SETTINGS && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed && typeof parsed === 'object') {
+            setSiteSettings({ ...DEFAULT_SITE_SETTINGS, ...parsed });
           }
         } catch {
           // ignore
@@ -354,6 +385,7 @@ export function App() {
   const [rentalOutfit, setRentalOutfit] = useState<LehengaOutfit | null>(null);
   const [shareOutfit, setShareOutfit] = useState<LehengaOutfit | null>(null);
   const [isTasksDrawerOpen, setIsTasksDrawerOpen] = useState(false);
+  const [isFaqModalOpen, setIsFaqModalOpen] = useState(false);
 
   // Google Tasks OAuth state
   const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(() =>
@@ -400,6 +432,11 @@ export function App() {
     setSiteSettings(nextSettings);
     try {
       localStorage.setItem(STORAGE_KEY_SITE_SETTINGS, JSON.stringify(nextSettings));
+      if (typeof BroadcastChannel !== 'undefined') {
+        const channel = new BroadcastChannel(CATALOG_SYNC_CHANNEL);
+        channel.postMessage({ type: 'SETTINGS_UPDATED', settings: nextSettings });
+        channel.close();
+      }
     } catch {
       // ignore
     }
@@ -413,6 +450,11 @@ export function App() {
         const saved = await res.json();
         setSiteSettings(saved);
         localStorage.setItem(STORAGE_KEY_SITE_SETTINGS, JSON.stringify(saved));
+        if (typeof BroadcastChannel !== 'undefined') {
+          const channel = new BroadcastChannel(CATALOG_SYNC_CHANNEL);
+          channel.postMessage({ type: 'SETTINGS_UPDATED', settings: saved });
+          channel.close();
+        }
       }
     } catch {
       // fallback to localStorage
@@ -426,14 +468,9 @@ export function App() {
   };
 
   const dynamicVibeFilters = useMemo(() => {
-    const uniqueVibes = Array.from(
-      new Set(outfits.map((o) => o.vibeCategory?.trim()).filter(Boolean))
-    );
-    return [
-      { label: 'All Couture', value: 'All Vibes' },
-      ...uniqueVibes.map((vibe) => ({ label: vibe, value: vibe })),
-    ];
-  }, [outfits]);
+    const primaryLabel = siteSettings.curatedCollectionTitle || 'Navratri Ni Pehvesh';
+    return [{ label: primaryLabel, value: 'All Vibes' }];
+  }, [siteSettings.curatedCollectionTitle]);
 
   const filteredOutfits = useMemo(() => {
     return outfits
@@ -720,14 +757,13 @@ export function App() {
             {/* Section Title & Subtitle */}
             <div className="text-center max-w-2xl mx-auto mb-10 space-y-2">
               <span className="text-[11px] uppercase tracking-[0.22em] text-[#D81B60] font-semibold block">
-                Curated Bridal & Festive Edit
+                {siteSettings.catalogSectionKicker || DEFAULT_SITE_SETTINGS.catalogSectionKicker}
               </span>
               <h2 className="font-editorial text-3xl sm:text-5xl font-semibold text-[#4A1525] tracking-tight">
-                The Lehenga Collection
+                {siteSettings.catalogSectionTitle || DEFAULT_SITE_SETTINGS.catalogSectionTitle}
               </h2>
               <p className="text-xs sm:text-sm text-[#4A1525]/70">
-                Every piece is custom-fitted to your waist & blouse measurements, steam-sanitized,
-                and ready for pickup or delivery in Indore.
+                {siteSettings.catalogSectionSubtitle || DEFAULT_SITE_SETTINGS.catalogSectionSubtitle}
               </p>
             </div>
 
@@ -869,7 +905,7 @@ export function App() {
                     Step 02
                   </span>
                   <h3 className="font-editorial text-2xl font-semibold text-[#4A1525]">
-                    Slay The Function (Main Character Energy)
+                    Slay The Function
                   </h3>
                   <p className="text-xs text-[#4A1525]/75 leading-relaxed">
                     Pick up your freshly steam-sanitized, perfectly pressed outfit in a luxury bag.
@@ -911,31 +947,58 @@ export function App() {
       <footer className="bg-[#FCE4EC] text-[#4A1525] py-14 border-t border-[#F8BBD0]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 md:grid-cols-12 gap-10 items-start">
           <div className="md:col-span-5 space-y-4">
-            {siteSettings.bottomLogoUrl ? (
-              <img
-                src={siteSettings.bottomLogoUrl}
-                alt={siteSettings.brandTitle || 'LOL By Sanjeevani'}
-                style={{ height: `${siteSettings.bottomLogoHeight || 88}px` }}
-                className="w-auto object-contain bg-white rounded-xl p-2 border border-[#F8BBD0] transition-all duration-200"
-              />
-            ) : (
+            <div className="flex flex-wrap items-center gap-3.5">
+              {siteSettings.bottomLogoUrl ? (
+                <img
+                  src={siteSettings.bottomLogoUrl}
+                  alt={siteSettings.brandTitle || 'LOL By Sanjeevani'}
+                  style={{ height: `${siteSettings.bottomLogoHeight || 88}px` }}
+                  className="w-auto object-contain bg-white rounded-xl p-2 border border-[#F8BBD0] transition-all duration-200"
+                />
+              ) : (
+                <div
+                  className="inline-block bg-white rounded-2xl px-4 py-2.5 border border-[#F8BBD0] origin-left transition-transform duration-200"
+                  style={{
+                    transform: `scale(${(siteSettings.bottomLogoHeight || 88) / 80})`,
+                  }}
+                >
+                  <LolBrandLogo variant="navbar" />
+                </div>
+              )}
+
+              {/* Store Map Box matching the bottom LOL logo box design */}
               <div
-                className="inline-block bg-white rounded-2xl px-4 py-2.5 border border-[#F8BBD0] origin-left transition-transform duration-200"
                 style={{
-                  transform: `scale(${(siteSettings.bottomLogoHeight || 88) / 80})`,
+                  height: `${siteSettings.bottomLogoHeight || 88}px`,
+                  width: `${siteSettings.bottomLogoHeight || 88}px`,
                 }}
+                className="bg-white rounded-xl p-2 border border-[#F8BBD0] overflow-hidden shrink-0 transition-all duration-200"
               >
-                <LolBrandLogo variant="navbar" />
+                <iframe
+                  src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3682.2433627829428!2d75.8253262753026!3d22.64471327944041!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x3962fbf37cbf4d3f%3A0xd1a33d5920c15580!2sAnantnath%20Apartment!5e0!3m2!1sen!2sin!4v1790532421053!5m2!1sen!2sin"
+                  title="Store Location - Anantnath Apartment"
+                  className="w-full h-full rounded-lg border-0"
+                  allowFullScreen
+                  loading="lazy"
+                  referrerPolicy="strict-origin-when-cross-origin"
+                />
               </div>
-            )}
+            </div>
             <p className="text-xs text-[#4A1525]/75 max-w-sm leading-relaxed">
-              {siteSettings.footerDescription}
+              {siteSettings.footerDescription ||
+                'At LOL By Sanjeevani, we are entirely obsessed with making you look like a million bucks on and off the feed. Our collection is meticulously handpicked to deliver pure main-character energy for every grand wedding, sangeet night, and high-energy festival in Indore. We refresh our racks constantly, ensuring you always stay three steps ahead of the trends.'}
             </p>
             <div className="flex flex-wrap items-center gap-4 text-xs text-[#4A1525]/85 pt-1">
-              <span className="inline-flex items-center gap-1.5">
-                <MapPin className="w-3.5 h-3.5 text-[#D81B60]" />
-                {siteSettings.studioLocation}
-              </span>
+              <a
+                href="https://www.instagram.com/lehenga_on_lease/"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Follow LOL Lehenga On Lease on Instagram"
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white hover:bg-[#D81B60] text-[#4A1525] hover:text-white border border-[#F8BBD0] hover:border-[#D81B60] font-semibold transition-all shadow-2xs group"
+              >
+                <Instagram className="w-4 h-4 text-[#D81B60] group-hover:text-white transition-colors shrink-0" />
+                <span>@lehenga_on_lease</span>
+              </a>
             </div>
           </div>
 
@@ -953,48 +1016,56 @@ export function App() {
                   }}
                   className="hover:text-[#D81B60] transition-colors cursor-pointer"
                 >
-                  All Couture
+                  {siteSettings.curatedCollectionTitle || 'Navratri Ni Pehvesh'}
                 </button>
               </li>
             </ul>
           </div>
 
           <div className="md:col-span-3 space-y-3">
-            <h4 className="text-[11px] uppercase tracking-[0.2em] text-[#D81B60] font-semibold">
-              Book A Fitting
-            </h4>
-            <p className="text-xs text-[#4A1525]/75 leading-relaxed">
-              Need help styling your Sangeet or Bridal look? Chat directly with Sanjeevani’s studio
-              team on WhatsApp.
-            </p>
-            <a
-              href={`https://wa.me/${siteSettings.whatsappNumber || '919826000000'}?text=Hi%20LOL%20By%20Sanjeevani!%20I%20would%20like%20to%20book%20a%20lehenga%20trial%20in%20Indore.`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-5 py-3 rounded-full bg-[#D81B60] text-white text-xs uppercase tracking-wider font-semibold hover:bg-[#AD1457] transition-colors shadow-sm"
-            >
-              <PhoneCall className="w-3.5 h-3.5" />
-              <span>WhatsApp Concierge</span>
-            </a>
+            <div className="flex flex-col items-start gap-2.5">
+              <a
+                href={`https://wa.me/${siteSettings.whatsappNumber || '919826000000'}?text=Hi%20LOL%20By%20Sanjeevani!%20I%20would%20like%20to%20book%20a%20lehenga%20trial%20in%20Indore.`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center gap-2 w-48 px-5 py-3 rounded-xl bg-[#D81B60] text-white text-xs uppercase tracking-wider font-semibold hover:bg-[#AD1457] transition-all shadow-sm"
+              >
+                <PhoneCall className="w-3.5 h-3.5 shrink-0" />
+                <span>WhatsApp Us</span>
+              </a>
+
+              <button
+                type="button"
+                onClick={() => setIsFaqModalOpen(true)}
+                title="LOL FAQ: The Ultimate Vibe Check"
+                className="inline-flex items-center justify-center gap-2 w-48 px-5 py-3 rounded-xl bg-white hover:bg-[#D81B60] text-[#4A1525] hover:text-white border border-[#F48FB1] hover:border-[#D81B60] text-xs uppercase tracking-wider font-semibold transition-all shadow-sm cursor-pointer group"
+              >
+                <HelpCircle className="w-3.5 h-3.5 text-[#D81B60] group-hover:text-white transition-colors shrink-0" />
+                <span>FAQ</span>
+              </button>
+            </div>
           </div>
         </div>
 
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-10 pt-6 border-t border-[#F8BBD0] flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-[#4A1525]/65">
           <p>© {new Date().getFullYear()} LOL — Lehenga On Lease By Sanjeevani. All rights reserved.</p>
-          <div className="flex items-center gap-4">
-            <span>24-Hour Next-Day Return • Steam-Sanitized Designer Wear • Indore</span>
-            <button
-              onClick={() => {
-                setActiveView('admin');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              className="inline-flex items-center gap-1 text-[#4A1525]/55 hover:text-[#D81B60] transition-colors cursor-pointer"
-              title="Open Backend CMS (/admin)"
-            >
-              <Lock className="w-3 h-3" />
-              <span>Backend Admin</span>
-            </button>
-          </div>
+          <a
+            href="http://sanjgroup.vercel.app/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2.5 text-[#4A1525]/80 hover:text-[#D81B60] font-medium transition-colors group"
+          >
+            <span className="underline-offset-4 group-hover:underline">
+              A Part of Sanj Group, Indore
+            </span>
+            <span className="inline-flex items-center justify-center bg-white rounded-lg px-2 py-1 border border-[#F8BBD0] shadow-2xs group-hover:border-[#D81B60] transition-colors">
+              <img
+                src="/sanj-group-logo.svg"
+                alt="Sanj Group of Properties Logo"
+                className="h-6 w-auto object-contain"
+              />
+            </span>
+          </a>
         </div>
       </footer>
 
@@ -1008,6 +1079,9 @@ export function App() {
 
       {/* Social & WhatsApp Share Modal */}
       <ShareModal outfit={shareOutfit} onClose={() => setShareOutfit(null)} />
+
+      {/* FAQ Modal triggered from Bottom Footer */}
+      <FaqModal isOpen={isFaqModalOpen} onClose={() => setIsFaqModalOpen(false)} />
 
       {/* Studio Bookings & Google Tasks Drawer */}
       <GoogleTasksDrawer

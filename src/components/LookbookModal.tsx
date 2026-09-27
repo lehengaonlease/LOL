@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ArrowLeft,
   Heart,
@@ -8,7 +8,9 @@ import {
   ChevronRight,
   ZoomIn,
   ZoomOut,
-  Film,
+  Play,
+  ShieldCheck,
+  Clock,
 } from 'lucide-react';
 import { LehengaOutfit } from '../types';
 import { ProductCard } from './ProductCard';
@@ -40,6 +42,7 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
   const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 35 });
   const [selectedSize, setSelectedSize] = useState<string>('');
   const [activeMediaIdx, setActiveMediaIdx] = useState(0);
+  const mainVideoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     setIsZoomed(false);
@@ -60,7 +63,7 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
         : [];
 
     imgs.forEach((url, idx) => {
-      list.push({ type: 'image', url, label: `Image ${idx + 1}` });
+      list.push({ type: 'image', url, label: `Look ${idx + 1}` });
     });
 
     const vid = outfit.videoUrl || (outfit.mediaType === 'video' ? outfit.mediaUrl : '');
@@ -72,15 +75,27 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
       list.push({
         type: 'image',
         url: outfit.mediaUrl || '/images/lehenga-orange-zardosi.jpg',
-        label: 'Image 1',
+        label: 'Look 1',
       });
     }
     return list;
   }, [outfit]);
 
+  const currentMedia = mediaGallery[activeMediaIdx] || mediaGallery[0];
+
+  useEffect(() => {
+    if (!currentMedia || currentMedia.type !== 'video') return;
+    const v = mainVideoRef.current;
+    if (!v) return;
+    v.defaultMuted = true;
+    v.muted = true;
+    v.loop = true;
+    v.playsInline = true;
+    v.play().catch(() => {});
+  }, [currentMedia]);
+
   if (!outfit) return null;
 
-  const currentMedia = mediaGallery[activeMediaIdx] || mediaGallery[0];
   const currentSize = selectedSize || outfit.sizes[0] || 'M';
 
   const relatedOutfits = allOutfits
@@ -122,108 +137,142 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
           </div>
         </div>
 
-        {/* Full-Page Luxury Card */}
+        {/* Luxury Editorial Product Detail Layout */}
         <div className="w-full bg-white rounded-3xl overflow-hidden shadow-[0_24px_60px_-15px_rgba(216,27,96,0.12)] border border-[#F8BBD0]/80 grid grid-cols-1 lg:grid-cols-12">
-          {/* Left Column: Full-Bleed Portrait with Gallery Thumbnails & Floating + Magnifying Glass Zoom */}
-          <div
-            onMouseMove={handleImageMouseMove}
-            onClick={() => {
-              if (currentMedia.type === 'image') {
-                setIsZoomed((prev) => !prev);
-              }
-            }}
-            className={`lg:col-span-6 bg-[#FFF0F5] relative flex flex-col justify-between min-h-[460px] sm:min-h-[600px] lg:min-h-[720px] overflow-hidden ${
-              currentMedia.type === 'image'
-                ? isZoomed
-                  ? 'cursor-zoom-out'
-                  : 'cursor-zoom-in'
-                : ''
-            }`}
-          >
-            {currentMedia.type === 'video' ? (
-              <video
-                key={currentMedia.url}
-                src={currentMedia.url}
-                className="w-full h-full object-cover object-top"
-                autoPlay
-                muted
-                loop
-                playsInline
-              />
-            ) : (
-              <img
-                src={currentMedia.url}
-                alt={outfit.title}
-                style={{
-                  transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
-                }}
-                className={`w-full h-full object-cover object-top transition-transform duration-300 ease-out ${
-                  isZoomed ? 'scale-[2]' : 'scale-100'
-                }`}
-              />
-            )}
-
-            {/* Gallery Thumbnails (4 Images + 1 Video) */}
-            {mediaGallery.length > 1 && (
-              <div
-                onClick={(e) => e.stopPropagation()}
-                className="absolute bottom-5 left-5 z-20 flex items-center gap-2 bg-white/90 backdrop-blur-md p-1.5 rounded-2xl border border-[#F8BBD0] shadow-md"
-              >
-                {mediaGallery.map((item, idx) => (
-                  <button
-                    key={`${item.label}-${idx}`}
-                    type="button"
-                    onClick={() => {
-                      setActiveMediaIdx(idx);
-                      setIsZoomed(false);
-                    }}
-                    title={item.label}
-                    className={`relative w-11 h-14 rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${
-                      activeMediaIdx === idx
-                        ? 'border-[#D81B60] scale-105 shadow-xs'
-                        : 'border-transparent opacity-75 hover:opacity-100'
-                    }`}
-                  >
-                    {item.type === 'video' ? (
-                      <div className="w-full h-full bg-[#4A1525] flex flex-col items-center justify-center text-white">
-                        <Film className="w-4 h-4 text-[#F48FB1]" />
-                        <span className="text-[8px] uppercase font-bold mt-0.5">Video</span>
-                      </div>
-                    ) : (
-                      <img
-                        src={item.url}
-                        alt={item.label}
-                        className="w-full h-full object-cover object-top"
-                      />
-                    )}
-                  </button>
-                ))}
+          {/* Left Column: Vertical Thumbnail Rail (4 Photos + 1 Video) + Main 3:4 Portrait Stage */}
+          <div className="lg:col-span-7 p-4 sm:p-6 bg-[#FFF5F8]/60 flex flex-col-reverse sm:flex-row gap-4 items-stretch">
+            {/* Thumbnail Rail (Left on Desktop/Tablet, Bottom Row on Mobile) */}
+            {mediaGallery.length >= 1 && (
+              <div className="flex sm:flex-col gap-2.5 overflow-x-auto sm:overflow-y-auto no-scrollbar shrink-0 sm:w-20">
+                {mediaGallery.map((item, idx) => {
+                  const isActive = activeMediaIdx === idx;
+                  return (
+                    <button
+                      key={`${item.label}-${idx}`}
+                      type="button"
+                      onClick={() => {
+                        setActiveMediaIdx(idx);
+                        setIsZoomed(false);
+                      }}
+                      title={item.label}
+                      className={`relative w-16 h-22 sm:w-20 sm:h-26 rounded-xl overflow-hidden border-2 transition-all shrink-0 cursor-pointer ${
+                        isActive
+                          ? 'border-[#D81B60] ring-2 ring-[#D81B60]/25 shadow-sm'
+                          : 'border-[#F8BBD0]/70 opacity-75 hover:opacity-100'
+                      }`}
+                    >
+                      {item.type === 'video' ? (
+                        <div className="relative w-full h-full bg-[#2B180A]">
+                          <video
+                            src={item.url}
+                            className="w-full h-full object-cover object-top"
+                            muted
+                            loop
+                            autoPlay
+                            playsInline
+                          />
+                          <div className="absolute inset-0 bg-black/30 flex flex-col items-center justify-center text-white">
+                            <span className="w-6 h-6 rounded-full bg-white/90 text-[#D81B60] flex items-center justify-center shadow-xs">
+                              <Play className="w-3 h-3 fill-current ml-0.5" />
+                            </span>
+                            <span className="text-[8px] uppercase tracking-wider font-bold mt-1">
+                              Video
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <img
+                          src={item.url}
+                          alt={item.label}
+                          className="w-full h-full object-cover object-top"
+                        />
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )}
 
-            {/* Floating + Magnifying Glass Button */}
-            {currentMedia.type === 'image' && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
+            {/* Main 3:4 Portrait Stage */}
+            <div
+              onMouseMove={handleImageMouseMove}
+              onClick={() => {
+                if (currentMedia.type === 'image') {
                   setIsZoomed((prev) => !prev);
-                }}
-                aria-label={isZoomed ? 'Zoom out image' : 'Zoom in image'}
-                title={isZoomed ? 'Zoom Out' : 'Zoom In'}
-                className="absolute bottom-5 right-5 z-20 w-12 h-12 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] shadow-lg flex items-center justify-center text-[#4A1525] hover:bg-[#D81B60] hover:text-white hover:border-[#D81B60] transition-all cursor-pointer"
-              >
-                {isZoomed ? (
-                  <ZoomOut className="w-5 h-5" />
-                ) : (
-                  <ZoomIn className="w-5 h-5" />
-                )}
-              </button>
-            )}
+                }
+              }}
+              className={`relative flex-1 aspect-[3/4] rounded-2xl bg-[#FFF0F5] overflow-hidden border border-[#F8BBD0]/60 ${
+                currentMedia.type === 'image'
+                  ? isZoomed
+                    ? 'cursor-zoom-out'
+                    : 'cursor-zoom-in'
+                  : ''
+              }`}
+            >
+              {currentMedia.type === 'video' ? (
+                <video
+                  ref={mainVideoRef}
+                  key={currentMedia.url}
+                  src={currentMedia.url}
+                  className="w-full h-full object-cover object-top"
+                  autoPlay
+                  muted
+                  loop
+                  playsInline
+                  preload="auto"
+                  onCanPlay={(e) => {
+                    e.currentTarget.muted = true;
+                    e.currentTarget.play().catch(() => {});
+                  }}
+                  onPause={(e) => {
+                    e.currentTarget.muted = true;
+                    e.currentTarget.play().catch(() => {});
+                  }}
+                />
+              ) : (
+                <img
+                  src={currentMedia.url}
+                  alt={outfit.title}
+                  style={{
+                    transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
+                  }}
+                  className={`w-full h-full object-cover object-top transition-transform duration-300 ease-out ${
+                    isZoomed ? 'scale-[2]' : 'scale-100'
+                  }`}
+                />
+              )}
+
+              {/* Top-left SKU Pill */}
+              <div className="absolute top-4 left-4 z-10">
+                <span className="px-3 py-1 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] text-[11px] font-mono-num font-semibold text-[#4A1525] shadow-2xs">
+                  {outfit.code}
+                </span>
+              </div>
+
+              {/* Floating + Magnifying Glass Button */}
+              {currentMedia.type === 'image' && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsZoomed((prev) => !prev);
+                  }}
+                  aria-label={isZoomed ? 'Zoom out image' : 'Zoom in image'}
+                  title={isZoomed ? 'Zoom Out' : 'Zoom In'}
+                  className="absolute bottom-5 right-5 z-20 w-12 h-12 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] shadow-lg flex items-center justify-center text-[#4A1525] hover:bg-[#D81B60] hover:text-white hover:border-[#D81B60] transition-all cursor-pointer"
+                >
+                  {isZoomed ? (
+                    <ZoomOut className="w-5 h-5" />
+                  ) : (
+                    <ZoomIn className="w-5 h-5" />
+                  )}
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Right Column: Full-Page Luxury Editorial Details */}
-          <div className="lg:col-span-6 p-6 sm:p-10 lg:p-12 flex flex-col justify-between">
+          <div className="lg:col-span-5 p-6 sm:p-10 flex flex-col justify-between">
             <div className="space-y-6">
               {/* Category & Wishlist */}
               <div className="flex items-center justify-between gap-2">
@@ -245,7 +294,7 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
 
               {/* Title & Pricing */}
               <div>
-                <h1 className="font-editorial text-3xl sm:text-4xl lg:text-5xl font-semibold text-[#4A1525] leading-tight">
+                <h1 className="font-editorial text-3xl sm:text-4xl font-semibold text-[#4A1525] leading-tight">
                   {outfit.title}
                 </h1>
 
@@ -285,6 +334,22 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
                       {size}
                     </button>
                   ))}
+                </div>
+              </div>
+
+              {/* Studio Highlights */}
+              <div className="grid grid-cols-2 gap-3 pt-4 border-t border-[#F8BBD0]/60">
+                <div className="p-3 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0]/60 flex items-center gap-2.5">
+                  <ShieldCheck className="w-4 h-4 text-[#D81B60] shrink-0" />
+                  <span className="text-[11px] font-medium text-[#4A1525]/80">
+                    Steam-Sanitized & Custom Altered
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0]/60 flex items-center gap-2.5">
+                  <Clock className="w-4 h-4 text-[#D81B60] shrink-0" />
+                  <span className="text-[11px] font-medium text-[#4A1525]/80">
+                    24-Hr Next-Day Return
+                  </span>
                 </div>
               </div>
             </div>

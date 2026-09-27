@@ -317,6 +317,17 @@ async function startServer() {
     res.json(outfits);
   });
 
+  // API: Sync entire outfits catalog from client backup (prevents container cold-start from wiping custom listings)
+  app.put('/api/outfits/sync', (req, res) => {
+    const { outfits } = req.body;
+    if (!Array.isArray(outfits)) {
+      res.status(400).json({ error: 'Invalid outfits array' });
+      return;
+    }
+    saveOutfits(outfits);
+    res.json(outfits);
+  });
+
   // API: Get & Create Customer Testimonials (Indore Client Reviews + 1 Photo)
   app.get('/api/testimonials', (_req, res) => {
     res.json(loadTestimonials());
@@ -472,7 +483,7 @@ async function startServer() {
           : 'image',
       images: savedImages,
       videoUrl: savedVideoUrl || undefined,
-      vibeCategory: String(vibeCategory || '').trim() || 'Sangeet Main Character',
+      vibeCategory: String(vibeCategory || '').trim() || 'Navratri Ni Pehvesh',
       sizes: Array.isArray(sizes) && sizes.length > 0 ? sizes : ['XS-S', 'M-L (Adjustable)'],
       available: true,
       createdAt: new Date().toISOString(),
@@ -511,15 +522,32 @@ async function startServer() {
           img.startsWith('data:') ? saveBase64MediaToPublic(img, 'lehenga-img') : img
         );
     }
-    if (typeof incoming.videoUrl === 'string' && incoming.videoUrl.startsWith('data:')) {
-      incoming.videoUrl = saveBase64MediaToPublic(incoming.videoUrl, 'lehenga-vid');
+    if (typeof incoming.videoUrl === 'string') {
+      const trimmedVideo = incoming.videoUrl.trim();
+      if (trimmedVideo.startsWith('data:')) {
+        incoming.videoUrl = saveBase64MediaToPublic(trimmedVideo, 'lehenga-vid');
+      } else {
+        incoming.videoUrl = trimmedVideo;
+      }
     }
 
-    outfits[index] = {
+    const mergedOutfit: LehengaOutfit = {
       ...outfits[index],
       ...incoming,
       id: outfits[index].id,
     };
+
+    if ('videoUrl' in incoming && !incoming.videoUrl) {
+      delete mergedOutfit.videoUrl;
+      const firstPhoto =
+        (Array.isArray(mergedOutfit.images) && mergedOutfit.images[0]) ||
+        (mergedOutfit.mediaType === 'image' && mergedOutfit.mediaUrl) ||
+        '/images/lehenga-orange-zardosi.jpg';
+      mergedOutfit.mediaType = 'image';
+      mergedOutfit.mediaUrl = firstPhoto;
+    }
+
+    outfits[index] = mergedOutfit;
     saveOutfits(outfits);
     res.json(outfits[index]);
   });

@@ -3,28 +3,40 @@
 @layer base {
   :root {
     --font-display: 'Cormorant Garamond', Georgia, serif;
-    --font-syne: 'Syne', sans-serif;
     --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-    --font-mono: 'JetBrains Mono', monospace;
+    --font-syne: var(--font-sans);
+    --font-mono: var(--font-sans);
+  }
+
+  body,
+  button,
+  input,
+  textarea,
+  select {
+    font-family: var(--font-sans);
   }
 
   body {
-    font-family: var(--font-sans);
     background-color: #FAF8F5;
-    color: #1C1310;
+    color: #4A1525;
     overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
   }
 
-  h1, h2, .font-editorial {
+  h1,
+  h2,
+  h3,
+  h4,
+  .font-editorial {
     font-family: var(--font-display);
   }
 
   .font-syne {
-    font-family: var(--font-syne);
+    font-family: var(--font-sans);
   }
 
   .font-mono-num {
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
   }
 }

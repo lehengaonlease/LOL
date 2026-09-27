@@ -32,51 +32,78 @@ function formatTimelineDate(dateObj: Date): string {
   return `${weekday}, ${day} ${month}, ${year}`;
 }
 
+function addDaysToDateStr(dateStr: string, daysToAdd: number): string {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const d = new Date(year, month - 1, day);
+  d.setDate(d.getDate() + daysToAdd);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 export const RentalModal: React.FC<RentalModalProps> = ({
   outfit,
   onClose,
   onConfirmBooking,
-  isTasksConnected,
 }) => {
   const tomorrowStr = useMemo(() => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
-    return d.toISOString().split('T')[0];
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
   }, []);
 
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [eventDate, setEventDate] = useState(tomorrowStr);
-  const [agreedToReturnPolicy, setAgreedToReturnPolicy] = useState(false);
-  const [syncTasks, setSyncTasks] = useState(true);
+  const [returnDate, setReturnDate] = useState(() => addDaysToDateStr(tomorrowStr, 1));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [bookingComplete, setBookingComplete] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
+  const minReturnDateStr = useMemo(() => {
+    if (!eventDate) return tomorrowStr;
+    return addDaysToDateStr(eventDate, 1);
+  }, [eventDate, tomorrowStr]);
+
+  // Calculate rental duration in days (1 day = 24 hours; 2 days > 24 hours = 2x daily rent, etc.)
+  const rentalDays = useMemo(() => {
+    if (!eventDate || !returnDate) return 1;
+    const [y1, m1, d1] = eventDate.split('-').map(Number);
+    const [y2, m2, d2] = returnDate.split('-').map(Number);
+    const start = new Date(y1, m1 - 1, d1);
+    const end = new Date(y2, m2 - 1, d2);
+    const diffMs = end.getTime() - start.getTime();
+    const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+    return Math.max(1, diffDays);
+  }, [eventDate, returnDate]);
+
+  const totalRent = useMemo(() => {
+    if (!outfit) return 0;
+    return outfit.pricePerDay * rentalDays;
+  }, [outfit, rentalDays]);
+
   const returnDateInfo = useMemo(() => {
-    if (!eventDate) {
+    if (!returnDate) {
       return {
         dateStr: '',
-        dateOnly: 'Select event date',
-        formatted: 'Select event date',
+        dateOnly: 'Select return date',
+        formatted: 'Select return date',
       };
     }
-    const [year, month, day] = eventDate.split('-').map(Number);
+    const [year, month, day] = returnDate.split('-').map(Number);
     const dateObj = new Date(year, month - 1, day);
-    dateObj.setDate(dateObj.getDate() + 1);
-
-    const yyyy = dateObj.getFullYear();
-    const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
-    const dd = String(dateObj.getDate()).padStart(2, '0');
-
     const dateOnly = formatTimelineDate(dateObj);
 
     return {
-      dateStr: `${yyyy}-${mm}-${dd}`,
+      dateStr: returnDate,
       dateOnly,
       formatted: `${dateOnly} (Before 12:00 PM)`,
     };
-  }, [eventDate]);
+  }, [returnDate]);
 
   const formattedEventDate = useMemo(() => {
     if (!eventDate) return '';
@@ -95,25 +122,43 @@ export const RentalModal: React.FC<RentalModalProps> = ({
       `🥻 OUTFIT DETAILS:`,
       `▪️ Name: ${outfit.title}`,
       `▪️ Code: ${outfit.code}`,
-      `▪️ Rent: ₹${outfit.pricePerDay.toLocaleString('en-IN')}/day`,
+      `▪️ Per Day Rent: ₹${outfit.pricePerDay.toLocaleString('en-IN')}/day`,
+      `▪️ Duration: ${rentalDays} ${rentalDays === 1 ? 'Day (24 Hours)' : `Days (${rentalDays * 24} Hours)`}`,
+      `▪️ Total Rent: ₹${totalRent.toLocaleString('en-IN')}`,
       ``,
       `📅 RENTAL TIMELINE:`,
-      `• Wear Date: ${formattedEventDate}`,
-      `• Return Deadline: ${returnDateInfo.dateOnly} (Before 12:00 PM)`,
+      `• Event / Pickup Date: ${formattedEventDate}`,
+      `• Return Date: ${returnDateInfo.dateOnly} (Before 12:00 PM)`,
       ``,
       `👤 MY DETAILS:`,
       `• Name: ${customerName.trim() || 'Guest'}`,
       `• Phone: ${customerPhone.trim() || 'Not provided'}`,
       `--------------------------------------------`,
-      `✅ VIBE CHECK: Passed! I explicitly agree to the 24-Hour Next-Day Return Policy. `,
-      ``,
       `Please share your available trial and Pickup slots so I can lock this look in! ✨🧡`,
     ].join('\n');
 
     return `https://wa.me/${STUDIO_WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
-  }, [outfit, formattedEventDate, returnDateInfo.dateOnly, customerName, customerPhone]);
+  }, [
+    outfit,
+    rentalDays,
+    totalRent,
+    formattedEventDate,
+    returnDateInfo.dateOnly,
+    customerName,
+    customerPhone,
+  ]);
 
   if (!outfit) return null;
+
+  const handleEventDateChange = (nextEventDate: string) => {
+    setEventDate(nextEventDate);
+    if (nextEventDate) {
+      const nextMinReturn = addDaysToDateStr(nextEventDate, 1);
+      if (!returnDate || returnDate < nextMinReturn) {
+        setReturnDate(nextMinReturn);
+      }
+    }
+  };
 
   const handleCompleteBooking = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -127,10 +172,8 @@ export const RentalModal: React.FC<RentalModalProps> = ({
       setValidationError('Please select your event date.');
       return;
     }
-    if (!agreedToReturnPolicy) {
-      setValidationError(
-        'Please confirm the 24-Hour Next-Day Return policy to unlock instant reservation.'
-      );
+    if (!returnDate) {
+      setValidationError('Please select your return date.');
       return;
     }
 
@@ -143,9 +186,9 @@ export const RentalModal: React.FC<RentalModalProps> = ({
           customerPhone: customerPhone.trim() || 'Not provided',
           eventDate,
           returnDate: returnDateInfo.dateStr,
-          agreedToNextDayReturn: agreedToReturnPolicy,
+          agreedToNextDayReturn: true,
         },
-        syncTasks
+        false
       );
       setBookingComplete(true);
     } catch (err) {
@@ -196,9 +239,13 @@ export const RentalModal: React.FC<RentalModalProps> = ({
               <h4 className="font-editorial text-xl font-semibold text-[#1C1310] truncate">
                 {outfit.title}
               </h4>
-              <div className="flex items-baseline gap-2 mt-0.5">
+              <div className="flex flex-wrap items-baseline gap-2 mt-0.5">
                 <span className="text-base font-semibold text-[#E85D24]">
-                  ₹{outfit.pricePerDay.toLocaleString('en-IN')}/day
+                  ₹{totalRent.toLocaleString('en-IN')} total
+                </span>
+                <span className="text-[11px] text-[#1C1310]/60">
+                  (₹{outfit.pricePerDay.toLocaleString('en-IN')}/day × {rentalDays}{' '}
+                  {rentalDays === 1 ? 'day' : 'days'})
                 </span>
               </div>
             </div>
@@ -214,10 +261,10 @@ export const RentalModal: React.FC<RentalModalProps> = ({
                   Reservation Logged
                 </h4>
                 <p className="text-xs text-[#1C1310]/65 max-w-md mx-auto leading-relaxed">
-                  Your return reminder for{' '}
-                  <strong className="text-[#1C1310]">{returnDateInfo.formatted}</strong> has been
-                  scheduled. Send the pre-filled WhatsApp message below to lock your trial slot at
-                  our Indore studio.
+                  Your reservation from <strong className="text-[#1C1310]">{formattedEventDate}</strong>{' '}
+                  to <strong className="text-[#1C1310]">{returnDateInfo.formatted}</strong> (
+                  {rentalDays} {rentalDays === 1 ? 'day' : 'days'} • ₹
+                  {totalRent.toLocaleString('en-IN')}) has been logged.
                 </p>
               </div>
 
@@ -280,113 +327,126 @@ export const RentalModal: React.FC<RentalModalProps> = ({
                 </div>
               </div>
 
-              {/* Event Date & Automatic Return Calculator */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 p-4 rounded-xl bg-[#FAF8F5] border border-[#1C1310]/10">
-                <div>
-                  <label className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/75 mb-1.5">
-                    <Calendar className="w-3.5 h-3.5 text-[#E85D24]" />
-                    Event Date *
-                  </label>
-                  <input
-                    type="date"
-                    min={tomorrowStr}
-                    value={eventDate}
-                    onChange={(e) => setEventDate(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-[#1C1310]/15 rounded-lg text-xs font-medium text-[#1C1310] focus:outline-none focus:border-[#1C1310]"
-                  />
-                </div>
-
-                <div className="flex flex-col justify-center">
-                  <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[#E85D24]">
-                    <Clock className="w-3 h-3" />
-                    Scheduled Next-Day Return
-                  </span>
-                  <p className="text-xs font-semibold text-[#1C1310] mt-1">
-                    {returnDateInfo.formatted}
-                  </p>
-                </div>
-              </div>
-
-              {/* Mandatory 24-Hr Return Policy Checkbox */}
-              <label
-                className={`flex items-start gap-3 p-4 rounded-xl border transition-all cursor-pointer ${
-                  agreedToReturnPolicy
-                    ? 'bg-emerald-50/50 border-emerald-600/40'
-                    : 'bg-white border-[#1C1310]/15 hover:border-[#1C1310]/35'
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={agreedToReturnPolicy}
-                  onChange={(e) => setAgreedToReturnPolicy(e.target.checked)}
-                  className="mt-0.5 w-4 h-4 accent-[#1C1310] rounded cursor-pointer"
-                />
-                <div className="text-xs">
-                  <span className="font-semibold text-[#1C1310] block">
-                    I agree to the 24-Hour Next-Day Return Policy *
-                  </span>
-                  <span className="text-[#1C1310]/65 text-[11px] leading-relaxed block mt-0.5">
-                    I will return <strong>{outfit.code}</strong> on{' '}
-                    <strong className="text-[#1C1310]">{returnDateInfo.formatted}</strong> so it can
-                    be steam-sanitized for the next guest.
-                  </span>
-                </div>
-              </label>
-
-              {/* Google Tasks Reminder Option */}
-              <label className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-[#FAF8F5] border border-[#1C1310]/8 cursor-pointer">
-                <div className="flex items-center gap-2.5">
-                  <CheckSquare className="w-4 h-4 text-[#E85D24]" />
+              {/* Event Date, Return Date & Rental Period Price Calculator */}
+              <div className="p-4 rounded-xl bg-[#FAF8F5] border border-[#1C1310]/10 space-y-3.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                   <div>
-                    <span className="text-xs font-medium text-[#1C1310] block">
-                      Auto-create return & dry-clean task reminder
+                    <label className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/75 mb-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-[#E85D24]" />
+                      Event Date *
+                    </label>
+                    <input
+                      type="date"
+                      min={tomorrowStr}
+                      value={eventDate}
+                      onChange={(e) => handleEventDateChange(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-[#1C1310]/15 rounded-lg text-xs font-medium text-[#1C1310] focus:outline-none focus:border-[#1C1310]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#1C1310]/75 mb-1.5">
+                      <Clock className="w-3.5 h-3.5 text-[#E85D24]" />
+                      Return Date *
+                    </label>
+                    <input
+                      type="date"
+                      min={minReturnDateStr}
+                      value={returnDate}
+                      onChange={(e) => setReturnDate(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-[#1C1310]/15 rounded-lg text-xs font-medium text-[#1C1310] focus:outline-none focus:border-[#1C1310]"
+                    />
+                  </div>
+                </div>
+
+                {/* Automatic Multi-Day Rent Calculation Breakdown */}
+                <div className="pt-3 border-t border-[#1C1310]/10 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-[#1C1310]/55 block">
+                      Selected Rental Period
                     </span>
-                    <span className="text-[10px] text-[#1C1310]/55 block">
-                      {isTasksConnected
-                        ? 'Synced with your connected Google Tasks'
-                        : 'Saved to Studio Bookings & ready for 1-click Google Tasks sync'}
+                    <span className="text-xs font-semibold text-[#1C1310]">
+                      {rentalDays === 1
+                        ? '1 Day (Up to 24 Hours)'
+                        : `${rentalDays} Days (${rentalDays * 24} Hours)`}{' '}
+                      • Return before 12:00 PM
+                    </span>
+                  </div>
+
+                  <div className="text-right">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-[#1C1310]/55 block">
+                      ₹{outfit.pricePerDay.toLocaleString('en-IN')}/day × {rentalDays}{' '}
+                      {rentalDays === 1 ? 'day' : 'days'}
+                    </span>
+                    <span className="text-base font-bold text-[#E85D24]">
+                      ₹{totalRent.toLocaleString('en-IN')}
                     </span>
                   </div>
                 </div>
-                <input
-                  type="checkbox"
-                  checked={syncTasks}
-                  onChange={(e) => setSyncTasks(e.target.checked)}
-                  className="w-4 h-4 accent-[#1C1310] rounded cursor-pointer"
-                />
-              </label>
+              </div>
 
-              {/* Action Buttons */}
-              <div className="pt-2 flex flex-col sm:flex-row gap-3">
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="flex-1 py-3.5 px-6 rounded-xl bg-[#1C1310] text-white text-xs uppercase tracking-[0.15em] font-semibold hover:bg-[#E85D24] transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-                >
-                  <Sparkles className="w-4 h-4" />
-                  <span>{isSubmitting ? 'Reserving...' : 'Confirm Reservation'}</span>
-                </button>
-
+              {/* Action Button */}
+              <div className="pt-2">
                 <a
-                  href={agreedToReturnPolicy ? whatsappBookingUrl : undefined}
+                  href={whatsappBookingUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => {
-                    if (!agreedToReturnPolicy) {
+                    setValidationError(null);
+                    if (!customerName.trim()) {
                       e.preventDefault();
-                      setValidationError(
-                        'Please check the 24-Hour Next-Day Return agreement box above first.'
-                      );
+                      setValidationError('Please enter your name so we can reserve your trial slot.');
+                      return;
                     }
+                    if (!eventDate) {
+                      e.preventDefault();
+                      setValidationError('Please select your event date.');
+                      return;
+                    }
+                    if (!returnDate) {
+                      e.preventDefault();
+                      setValidationError('Please select your return date.');
+                      return;
+                    }
+                    if (isSubmitting) {
+                      e.preventDefault();
+                      return;
+                    }
+
+                    setIsSubmitting(true);
+                    onConfirmBooking(
+                      {
+                        outfit,
+                        customerName: customerName.trim(),
+                        customerPhone: customerPhone.trim() || 'Not provided',
+                        eventDate,
+                        returnDate: returnDateInfo.dateStr,
+                        agreedToNextDayReturn: true,
+                      },
+                      false
+                    )
+                      .then(() => {
+                        setBookingComplete(true);
+                      })
+                      .catch((err) => {
+                        setValidationError(
+                          err instanceof Error
+                            ? err.message
+                            : 'Could not save booking. Please try again.'
+                        );
+                      })
+                      .finally(() => {
+                        setIsSubmitting(false);
+                      });
                   }}
-                  className={`py-3.5 px-5 rounded-xl font-semibold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
-                    agreedToReturnPolicy
-                      ? 'bg-[#25D366] text-white hover:bg-[#1ebe57] cursor-pointer'
-                      : 'bg-[#FAF8F5] text-[#1C1310]/40 border border-[#1C1310]/10 cursor-not-allowed'
-                  }`}
+                  className="w-full py-3.5 px-6 rounded-xl bg-[#1C1310] text-white text-xs uppercase tracking-[0.15em] font-semibold hover:bg-[#E85D24] transition-colors flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  <Send className="w-3.5 h-3.5" />
-                  <span>Direct WhatsApp</span>
+                  <Sparkles className="w-4 h-4" />
+                  <span>
+                    {isSubmitting
+                      ? 'Reserving...'
+                      : `Confirm Reservation • ₹${totalRent.toLocaleString('en-IN')}`}
+                  </span>
                 </a>
               </div>
             </form>
