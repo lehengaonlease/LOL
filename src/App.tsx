@@ -43,10 +43,10 @@ import {
   toggleTaskStatus,
 } from './services/googleTasksService';
 
-const STORAGE_KEY_OUTFITS = 'lol_indore_outfits_v2';
+const STORAGE_KEY_OUTFITS = 'lol_indore_outfits_v3';
 const STORAGE_KEY_TASKS = 'lol_indore_tasks_v2';
 const STORAGE_KEY_WISHLIST = 'lol_indore_wishlist_v2';
-const STORAGE_KEY_SITE_SETTINGS = 'lol_indore_site_settings_v1';
+const STORAGE_KEY_SITE_SETTINGS = 'lol_indore_site_settings_v2';
 const STORAGE_KEY_TESTIMONIALS = 'lol_indore_testimonials_v2';
 const CATALOG_SYNC_CHANNEL = 'lol_indore_catalog_sync_v1';
 
@@ -922,7 +922,7 @@ export function App() {
                     Step 03
                   </span>
                   <h3 className="font-editorial text-2xl font-semibold text-[#4A1525]">
-                    No Gatekeeping: Return Next Day
+                    Return on time
                   </h3>
                   <p className="text-xs text-[#4A1525]/75 leading-relaxed">
                     Bring it back by 12:00 PM the next day so another Indori kudi can slay her

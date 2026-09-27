@@ -1,6 +1,7 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Heart, Share2, Eye, Film } from 'lucide-react';
 import { LehengaOutfit } from '../types';
+import { VideoPlayer, resolvePublicVideoPath } from './VideoPlayer';
 
 interface ProductCardProps {
   outfit: LehengaOutfit;
@@ -19,8 +20,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   isWishlisted,
   onToggleWishlist,
 }) => {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-
   const mediaItems = useMemo(() => {
     const items: { type: 'image' | 'video'; url: string; label: string }[] = [];
 
@@ -29,7 +28,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     if (vid) {
       items.push({
         type: 'video',
-        url: vid,
+        url: resolvePublicVideoPath(vid),
         label: 'Video',
       });
     }
@@ -44,7 +43,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     imgs.forEach((url, idx) => {
       items.push({
         type: 'image',
-        url,
+        url: resolvePublicVideoPath(url),
         label: imgs.length > 1 ? `Photo ${idx + 1}` : 'Photo 1',
       });
     });
@@ -55,7 +54,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         '/images/lehenga-orange-zardosi.jpg';
       items.push({
         type: 'image',
-        url: fallbackPhoto,
+        url: resolvePublicVideoPath(fallbackPhoto),
         label: 'Photo 1',
       });
     }
@@ -72,25 +71,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
   const currentMedia = mediaItems[activeMediaIndex] || mediaItems[0];
 
-  // Ensure video thumbnail on front grid is ALWAYS playing on loop without voice
-  useEffect(() => {
-    if (currentMedia.type !== 'video') return;
-    const videoEl = videoRef.current;
-    if (!videoEl) return;
-
-    videoEl.defaultMuted = true;
-    videoEl.muted = true;
-    videoEl.loop = true;
-    videoEl.playsInline = true;
-
-    const playVideo = () => {
-      videoEl.muted = true;
-      videoEl.play().catch(() => {});
-    };
-
-    playVideo();
-  }, [currentMedia]);
-
   return (
     <article className="group flex flex-col bg-white rounded-2xl overflow-hidden border border-[#F8BBD0]/60 hover:border-[#F48FB1] transition-all duration-300 hover:shadow-[0_16px_40px_-12px_rgba(216,27,96,0.14)]">
       {/* 3:4 Full-Length Portrait Container */}
@@ -99,24 +79,10 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         className="relative aspect-[3/4] w-full bg-[#FFF0F5] overflow-hidden cursor-pointer"
       >
         {currentMedia.type === 'video' ? (
-          <video
-            ref={videoRef}
-            key={currentMedia.url}
+          <VideoPlayer
             src={currentMedia.url}
+            fallbackSrc="/lehenga-reel.mp4"
             className="w-full h-full object-cover object-top"
-            autoPlay
-            muted
-            loop
-            playsInline
-            preload="auto"
-            onCanPlay={(e) => {
-              e.currentTarget.muted = true;
-              e.currentTarget.play().catch(() => {});
-            }}
-            onPause={(e) => {
-              e.currentTarget.muted = true;
-              e.currentTarget.play().catch(() => {});
-            }}
           />
         ) : (
           <img

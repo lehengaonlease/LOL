@@ -89,6 +89,13 @@ function loadOutfits(): LehengaOutfit[] {
 
 function saveOutfits(outfits: LehengaOutfit[]) {
   fs.writeFileSync(CATALOG_FILE, JSON.stringify(outfits, null, 2), 'utf-8');
+  try {
+    const initialOutfitsFile = path.join(__dirname, 'src', 'data', 'initialOutfits.ts');
+    const tsContent = `import { LehengaOutfit } from '../types';\n\nexport const INITIAL_OUTFITS: LehengaOutfit[] = ${JSON.stringify(outfits, null, 2)};\n`;
+    fs.writeFileSync(initialOutfitsFile, tsContent, 'utf-8');
+  } catch (err) {
+    console.error('Error syncing initialOutfits.ts:', err);
+  }
 }
 
 function loadBookings(): RentalBooking[] {
@@ -154,9 +161,21 @@ function saveBase64MediaToPublic(dataUrl: string, prefix = 'outfit'): string {
   else if (mimeType.includes('webm')) ext = 'webm';
   else if (mimeType.includes('quicktime') || mimeType.includes('mov')) ext = 'mov';
 
+  const buffer = Buffer.from(base64Data, 'base64');
   const filename = `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}.${ext}`;
   const filePath = path.join(UPLOADS_DIR, filename);
-  fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+  fs.writeFileSync(filePath, buffer);
+
+  // Also write videos directly to public/ root for static Vite production builds
+  if (ext === 'mp4' || ext === 'webm' || ext === 'mov') {
+    const publicRootFile = path.join(__dirname, 'public', filename);
+    fs.writeFileSync(publicRootFile, buffer);
+    if (ext === 'mp4') {
+      fs.writeFileSync(path.join(__dirname, 'public', 'lehenga-reel.mp4'), buffer);
+    }
+    return `/${filename}`;
+  }
+
   return `/uploads/${filename}`;
 }
 
@@ -240,9 +259,11 @@ async function startServer() {
         res.status(400).json({ error: 'Invalid base64 video data' });
         return;
       }
+      const buffer = Buffer.from(matches[2], 'base64');
       const filePath = path.join(UPLOADS_DIR, 'hero-banner.mp4');
-      fs.writeFileSync(filePath, Buffer.from(matches[2], 'base64'));
-      const newUrl = `/uploads/hero-banner.mp4?t=${Date.now()}`;
+      fs.writeFileSync(filePath, buffer);
+      fs.writeFileSync(path.join(__dirname, 'public', 'hero-banner.mp4'), buffer);
+      const newUrl = '/hero-banner.mp4';
       const currentSettings = loadSiteSettings();
       saveSiteSettings({ ...currentSettings, heroVideoUrl: newUrl, heroMediaType: 'video' });
       res.json({ ok: true, url: newUrl });

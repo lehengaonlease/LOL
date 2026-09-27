@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   ArrowLeft,
   Heart,
@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { LehengaOutfit } from '../types';
 import { ProductCard } from './ProductCard';
+import { VideoPlayer, resolvePublicVideoPath } from './VideoPlayer';
 
 interface LookbookModalProps {
   outfit: LehengaOutfit | null;
@@ -42,7 +43,6 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
   const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 35 });
   const [selectedSize, setSelectedSize] = useState<string>('');
   const [activeMediaIdx, setActiveMediaIdx] = useState(0);
-  const mainVideoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     setIsZoomed(false);
@@ -63,18 +63,18 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
         : [];
 
     imgs.forEach((url, idx) => {
-      list.push({ type: 'image', url, label: `Look ${idx + 1}` });
+      list.push({ type: 'image', url: resolvePublicVideoPath(url), label: `Look ${idx + 1}` });
     });
 
     const vid = outfit.videoUrl || (outfit.mediaType === 'video' ? outfit.mediaUrl : '');
     if (vid) {
-      list.push({ type: 'video', url: vid, label: 'Twirl Video' });
+      list.push({ type: 'video', url: resolvePublicVideoPath(vid), label: 'Twirl Video' });
     }
 
     if (list.length === 0) {
       list.push({
         type: 'image',
-        url: outfit.mediaUrl || '/images/lehenga-orange-zardosi.jpg',
+        url: resolvePublicVideoPath(outfit.mediaUrl || '/images/lehenga-orange-zardosi.jpg'),
         label: 'Look 1',
       });
     }
@@ -82,17 +82,6 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
   }, [outfit]);
 
   const currentMedia = mediaGallery[activeMediaIdx] || mediaGallery[0];
-
-  useEffect(() => {
-    if (!currentMedia || currentMedia.type !== 'video') return;
-    const v = mainVideoRef.current;
-    if (!v) return;
-    v.defaultMuted = true;
-    v.muted = true;
-    v.loop = true;
-    v.playsInline = true;
-    v.play().catch(() => {});
-  }, [currentMedia]);
 
   if (!outfit) return null;
 
@@ -163,13 +152,10 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
                     >
                       {item.type === 'video' ? (
                         <div className="relative w-full h-full bg-[#2B180A]">
-                          <video
+                          <VideoPlayer
                             src={item.url}
+                            fallbackSrc="/lehenga-reel.mp4"
                             className="w-full h-full object-cover object-top"
-                            muted
-                            loop
-                            autoPlay
-                            playsInline
                           />
                           <div className="absolute inset-0 bg-black/30 flex flex-col items-center justify-center text-white">
                             <span className="w-6 h-6 rounded-full bg-white/90 text-[#D81B60] flex items-center justify-center shadow-xs">
@@ -210,24 +196,10 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
               }`}
             >
               {currentMedia.type === 'video' ? (
-                <video
-                  ref={mainVideoRef}
-                  key={currentMedia.url}
+                <VideoPlayer
                   src={currentMedia.url}
+                  fallbackSrc="/lehenga-reel.mp4"
                   className="w-full h-full object-cover object-top"
-                  autoPlay
-                  muted
-                  loop
-                  playsInline
-                  preload="auto"
-                  onCanPlay={(e) => {
-                    e.currentTarget.muted = true;
-                    e.currentTarget.play().catch(() => {});
-                  }}
-                  onPause={(e) => {
-                    e.currentTarget.muted = true;
-                    e.currentTarget.play().catch(() => {});
-                  }}
                 />
               ) : (
                 <img

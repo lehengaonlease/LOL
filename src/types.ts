@@ -43,13 +43,13 @@ export interface SiteSettings {
 export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   topLogoUrl: '/uploads/logo-top-1790531566115-6ys4f.png',
   bottomLogoUrl: '/uploads/logo-bottom-1790531569272-mgmg7.png',
-  topLogoHeight: 74,
+  topLogoHeight: 102,
   bottomLogoHeight: 200,
   brandHindiMark: 'लोल',
   brandTitle: 'LOL',
   brandSubtitle: 'Want it . Rent it',
   heroMediaType: 'video',
-  heroVideoUrl: '/uploads/hero-banner.mp4?t=1790531601705',
+  heroVideoUrl: '/hero-banner.mp4',
   heroPosterUrl: '/uploads/hero-poster.jpg',
   footerDescription:
     'At LOL By Sanjeevani, we are entirely obsessed with making you look like a million bucks on and off the feed. Our collection is meticulously handpicked to deliver pure main-character energy for every grand wedding, sangeet night, and high-energy festival in Indore. We refresh our racks constantly, ensuring you always stay three steps ahead of the trends.',
