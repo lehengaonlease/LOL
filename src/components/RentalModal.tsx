@@ -11,7 +11,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { LehengaOutfit, RentalBookingDraft } from '../types';
-import { resolvePublicVideoPath } from './VideoPlayer';
+import { OptimizedImage } from './OptimizedImage';
 
 interface RentalModalProps {
   outfit: LehengaOutfit | null;
@@ -228,8 +228,8 @@ export const RentalModal: React.FC<RentalModalProps> = ({
         <div className="p-6 overflow-y-auto luxury-scroll space-y-5">
           {/* Selected Outfit Summary */}
           <div className="flex gap-4 p-3.5 rounded-xl bg-[#FAF8F5] border border-[#1C1310]/8 items-center">
-            <img
-              src={resolvePublicVideoPath(outfit.mediaUrl)}
+            <OptimizedImage
+              src={outfit.mediaUrl}
               alt={outfit.title}
               className="w-16 h-20 rounded-lg object-cover object-top shrink-0 bg-[#EFECE6]"
             />

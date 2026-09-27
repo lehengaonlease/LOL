@@ -26,6 +26,8 @@ import {
 } from 'lucide-react';
 import { LehengaOutfit, SiteSettings, DEFAULT_SITE_SETTINGS } from '../types';
 import { LolBrandLogo } from './LolBrandLogo';
+import { VideoPlayer } from './VideoPlayer';
+import { OptimizedImage } from './OptimizedImage';
 
 interface AdminDashboardProps {
   outfits: LehengaOutfit[];
@@ -371,34 +373,21 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
   return (
     <article className="group flex flex-col bg-white rounded-2xl overflow-hidden border border-[#F8BBD0]/80 hover:border-[#D81B60] transition-all duration-300 shadow-[0_12px_32px_-12px_rgba(216,27,96,0.12)]">
       {/* 3:4 Full-Length Portrait Stage — Exact Match with Front End */}
-      <div className="relative aspect-[3/4] w-full bg-[#FFF0F5] overflow-hidden">
+      <div
+        onClick={() => onOpenDetailEditor(buildUpdatedOutfit())}
+        className="relative aspect-[3/4] w-full bg-[#FFF0F5] overflow-hidden cursor-pointer"
+      >
         {currentMedia.type === 'video' ? (
-          <video
-            ref={videoRef}
-            key={currentMedia.url}
+          <VideoPlayer
             src={currentMedia.url}
-            onClick={() => onOpenDetailEditor(buildUpdatedOutfit())}
-            className="w-full h-full object-cover object-top cursor-pointer"
-            autoPlay
-            muted
-            loop
-            playsInline
-            preload="auto"
-            onCanPlay={(e) => {
-              e.currentTarget.muted = true;
-              e.currentTarget.play().catch(() => {});
-            }}
-            onPause={(e) => {
-              e.currentTarget.muted = true;
-              e.currentTarget.play().catch(() => {});
-            }}
+            fallbackSrc="/lehenga-reel.mp4"
+            className="w-full h-full object-cover object-top"
           />
         ) : (
-          <img
+          <OptimizedImage
             src={currentMedia.url}
             alt={title}
-            onClick={() => onOpenDetailEditor(buildUpdatedOutfit())}
-            className="w-full h-full object-cover object-top transition-transform duration-700 ease-out group-hover:scale-105 cursor-pointer"
+            className="w-full h-full object-cover object-top transition-transform duration-700 ease-out group-hover:scale-105"
           />
         )}
 

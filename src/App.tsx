@@ -34,7 +34,7 @@ import { GoogleTasksDrawer } from './components/GoogleTasksDrawer';
 import { LolBrandLogo } from './components/LolBrandLogo';
 import { TestimonialSection } from './components/TestimonialSection';
 import { FaqModal } from './components/FaqModal';
-import { resolvePublicVideoPath } from './components/VideoPlayer';
+import { OptimizedImage } from './components/OptimizedImage';
 import {
   requestGoogleTasksToken,
   getStoredAccessToken,
@@ -950,9 +950,10 @@ export function App() {
           <div className="md:col-span-5 space-y-4">
             <div className="flex flex-wrap items-center gap-3.5">
               {siteSettings.bottomLogoUrl ? (
-                <img
-                  src={resolvePublicVideoPath(siteSettings.bottomLogoUrl)}
+                <OptimizedImage
+                  src={siteSettings.bottomLogoUrl}
                   alt={siteSettings.brandTitle || 'LOL By Sanjeevani'}
+                  isLogo
                   style={{ height: `${siteSettings.bottomLogoHeight || 88}px` }}
                   className="w-auto object-contain bg-white rounded-xl p-2 border border-[#F8BBD0] transition-all duration-200"
                 />

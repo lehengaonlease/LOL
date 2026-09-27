@@ -12,6 +12,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { CustomerTestimonial } from '../types';
+import { OptimizedImage } from './OptimizedImage';
 
 interface TestimonialSectionProps {
   testimonials: CustomerTestimonial[];
@@ -209,7 +210,7 @@ export const TestimonialSection: React.FC<TestimonialSectionProps> = ({
             <div className="grid grid-cols-1 lg:grid-cols-12 items-stretch">
               {/* Left: Client's 1 Uploaded Picture (3:4 Portrait Aspect on Mobile, Full Height on Desktop) */}
               <div className="lg:col-span-5 relative aspect-[3/4] lg:aspect-auto lg:min-h-[460px] bg-[#FFF0F5] overflow-hidden">
-                <img
+                <OptimizedImage
                   key={activeItem.id}
                   src={activeItem.photoUrl}
                   alt={`${activeItem.customerName} in LOL Lehenga`}

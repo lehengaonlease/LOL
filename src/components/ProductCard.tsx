@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Heart, Share2, Eye, Film } from 'lucide-react';
+import { Heart, Share2, Film } from 'lucide-react';
 import { LehengaOutfit } from '../types';
 import { VideoPlayer, resolvePublicVideoPath } from './VideoPlayer';
+import { OptimizedImage, resolveOptimizedImagePath } from './OptimizedImage';
 
 interface ProductCardProps {
   outfit: LehengaOutfit;
@@ -43,7 +44,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     imgs.forEach((url, idx) => {
       items.push({
         type: 'image',
-        url: resolvePublicVideoPath(url),
+        url: resolveOptimizedImagePath(url),
         label: imgs.length > 1 ? `Photo ${idx + 1}` : 'Photo 1',
       });
     });
@@ -54,7 +55,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         '/images/lehenga-orange-zardosi.jpg';
       items.push({
         type: 'image',
-        url: resolvePublicVideoPath(fallbackPhoto),
+        url: resolveOptimizedImagePath(fallbackPhoto),
         label: 'Photo 1',
       });
     }
@@ -85,10 +86,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             className="w-full h-full object-cover object-top"
           />
         ) : (
-          <img
+          <OptimizedImage
             src={currentMedia.url}
             alt={outfit.title}
-            loading="lazy"
             className="w-full h-full object-cover object-top transition-transform duration-700 ease-out group-hover:scale-105"
           />
         )}
@@ -203,17 +203,15 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            <a
-              href={`/outfit/${outfit.id}`}
-              onClick={(e) => {
-                e.preventDefault();
-                onInspect(outfit);
-              }}
+            <button
+              type="button"
+              onClick={() => onShare(outfit)}
               className="p-2.5 rounded-xl bg-[#FFF0F5] border border-[#F8BBD0] text-[#4A1525] hover:text-[#D81B60] hover:border-[#D81B60] transition-colors cursor-pointer"
-              title={`View Full Page (/outfit/${outfit.id})`}
+              title="Share Outfit"
+              aria-label="Share Outfit"
             >
-              <Eye className="w-4 h-4" />
-            </a>
+              <Share2 className="w-4 h-4" />
+            </button>
             <button
               type="button"
               onClick={() => onRent(outfit)}

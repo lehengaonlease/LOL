@@ -15,6 +15,7 @@ import {
 import { LehengaOutfit } from '../types';
 import { ProductCard } from './ProductCard';
 import { VideoPlayer, resolvePublicVideoPath } from './VideoPlayer';
+import { OptimizedImage, resolveOptimizedImagePath } from './OptimizedImage';
 
 interface LookbookModalProps {
   outfit: LehengaOutfit | null;
@@ -63,7 +64,7 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
         : [];
 
     imgs.forEach((url, idx) => {
-      list.push({ type: 'image', url: resolvePublicVideoPath(url), label: `Look ${idx + 1}` });
+      list.push({ type: 'image', url: resolveOptimizedImagePath(url), label: `Look ${idx + 1}` });
     });
 
     const vid = outfit.videoUrl || (outfit.mediaType === 'video' ? outfit.mediaUrl : '');
@@ -74,7 +75,7 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
     if (list.length === 0) {
       list.push({
         type: 'image',
-        url: resolvePublicVideoPath(outfit.mediaUrl || '/images/lehenga-orange-zardosi.jpg'),
+        url: resolveOptimizedImagePath(outfit.mediaUrl || '/images/lehenga-orange-zardosi.jpg'),
         label: 'Look 1',
       });
     }
@@ -167,7 +168,7 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
                           </div>
                         </div>
                       ) : (
-                        <img
+                        <OptimizedImage
                           src={item.url}
                           alt={item.label}
                           className="w-full h-full object-cover object-top"
@@ -202,9 +203,10 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
                   className="w-full h-full object-cover object-top"
                 />
               ) : (
-                <img
+                <OptimizedImage
                   src={currentMedia.url}
                   alt={outfit.title}
+                  priority
                   style={{
                     transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
                   }}
