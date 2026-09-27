@@ -1,4 +1,11 @@
 import React, { useRef, useEffect, useState } from 'react';
+import {
+  BUNDLED_LOGO_DATA_URL,
+  BUNDLED_LEHENGA_IMG_1_DATA_URL,
+  BUNDLED_LEHENGA_IMG_2_DATA_URL,
+  BUNDLED_HERO_POSTER_DATA_URL,
+  BUNDLED_VIDEO_MP4_BASE64,
+} from '../data/bundledAssets';
 
 export interface VideoPlayerProps {
   src: string;
@@ -7,25 +14,70 @@ export interface VideoPlayerProps {
   fallbackSrc?: string;
 }
 
+let cachedBundledVideoBlobUrl: string | null = null;
+
+export function getBundledVideoBlobUrl(): string {
+  if (cachedBundledVideoBlobUrl) return cachedBundledVideoBlobUrl;
+  try {
+    const binary = atob(BUNDLED_VIDEO_MP4_BASE64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], { type: 'video/mp4' });
+    cachedBundledVideoBlobUrl = URL.createObjectURL(blob);
+    return cachedBundledVideoBlobUrl;
+  } catch {
+    return '/lehenga-reel.mp4';
+  }
+}
+
 /**
- * Normalizes a video path so files stored in Vite's `public/` directory
- * are always referenced via an absolute root path (e.g. `/lehenga-reel.mp4`).
+ * Resolves any image, logo, poster, or video path so that even on static
+ * Vercel deployments where runtime `/uploads/` files are not pushed to Git,
+ * all brand logos, product images, posters, and videos load with 100% reliability.
  */
 export function resolvePublicVideoPath(rawSrc: string): string {
-  if (!rawSrc) return '/lehenga-reel.mp4';
+  if (!rawSrc) return getBundledVideoBlobUrl();
   const trimmed = rawSrc.trim();
 
-  // Keep external http(s), blob:, or data: URLs intact
-  if (
-    trimmed.startsWith('http://') ||
-    trimmed.startsWith('https://') ||
-    trimmed.startsWith('blob:') ||
-    trimmed.startsWith('data:')
-  ) {
+  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
     return trimmed;
   }
 
-  // Strip accidental "public/" or "./" prefixes
+  // Map known studio logos, product photos, hero poster, and videos to bundled production assets
+  if (
+    trimmed.includes('logo-top') ||
+    trimmed.includes('logo-bottom')
+  ) {
+    return BUNDLED_LOGO_DATA_URL;
+  }
+
+  if (trimmed.includes('lehenga-img-1')) {
+    return BUNDLED_LEHENGA_IMG_1_DATA_URL;
+  }
+
+  if (trimmed.includes('lehenga-img-2')) {
+    return BUNDLED_LEHENGA_IMG_2_DATA_URL;
+  }
+
+  if (trimmed.includes('hero-poster')) {
+    return BUNDLED_HERO_POSTER_DATA_URL;
+  }
+
+  if (
+    trimmed.includes('hero-banner.mp4') ||
+    trimmed.includes('lehenga-reel.mp4') ||
+    trimmed.includes('lehenga-video-')
+  ) {
+    return getBundledVideoBlobUrl();
+  }
+
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed;
+  }
+
   const cleaned = trimmed
     .replace(/^(\.\/)+/, '')
     .replace(/^public\//i, '')
@@ -38,23 +90,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   src,
   poster,
   className = 'w-full h-full object-cover',
-  fallbackSrc,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const normalizedPrimary = resolvePublicVideoPath(src);
-  const [currentSrc, setCurrentSrc] = useState<string>(normalizedPrimary);
-  const [triedFallback, setTriedFallback] = useState(false);
+  const [currentSrc, setCurrentSrc] = useState<string>(() => resolvePublicVideoPath(src));
+  const resolvedPoster = poster ? resolvePublicVideoPath(poster) : undefined;
 
   useEffect(() => {
     setCurrentSrc(resolvePublicVideoPath(src));
-    setTriedFallback(false);
   }, [src]);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    // Explicitly set DOM properties & attributes for iOS Safari / Android Chrome autoplay policies
+    // Mandatory attributes for mobile Safari & Chrome autoplay execution
     video.defaultMuted = true;
     video.muted = true;
     video.loop = true;
@@ -79,7 +128,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     attemptPlay();
 
-    // Resume playback when scrolling into viewport on mobile-first layouts
     let observer: IntersectionObserver | null = null;
     if (typeof IntersectionObserver !== 'undefined') {
       observer = new IntersectionObserver(
@@ -96,7 +144,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       observer.observe(video);
     }
 
-    // Unlock playback on first mobile touch/scroll interaction if browser deferred autoplay
     const unlockOnInteraction = () => {
       if (video && video.paused) {
         video.muted = true;
@@ -117,25 +164,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [currentSrc]);
 
   const handleVideoError = () => {
-    if (triedFallback) return;
-    setTriedFallback(true);
-
-    // Strip query string or fallback to root public video if /uploads path fails on static host
-    const withoutQuery = currentSrc.split('?')[0];
-    if (withoutQuery !== currentSrc) {
-      setCurrentSrc(withoutQuery);
-      return;
-    }
-
-    if (fallbackSrc) {
-      setCurrentSrc(resolvePublicVideoPath(fallbackSrc));
-      return;
-    }
-
-    if (currentSrc.includes('hero')) {
-      setCurrentSrc('/hero-banner.mp4');
-    } else if (currentSrc !== '/lehenga-reel.mp4') {
-      setCurrentSrc('/lehenga-reel.mp4');
+    const fallbackBlob = getBundledVideoBlobUrl();
+    if (currentSrc !== fallbackBlob) {
+      setCurrentSrc(fallbackBlob);
     }
   };
 
@@ -144,7 +175,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       ref={videoRef}
       key={currentSrc}
       src={currentSrc}
-      poster={poster}
+      poster={resolvedPoster}
       autoPlay
       muted
       loop

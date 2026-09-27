@@ -34,6 +34,7 @@ import { GoogleTasksDrawer } from './components/GoogleTasksDrawer';
 import { LolBrandLogo } from './components/LolBrandLogo';
 import { TestimonialSection } from './components/TestimonialSection';
 import { FaqModal } from './components/FaqModal';
+import { resolvePublicVideoPath } from './components/VideoPlayer';
 import {
   requestGoogleTasksToken,
   getStoredAccessToken,
@@ -43,10 +44,10 @@ import {
   toggleTaskStatus,
 } from './services/googleTasksService';
 
-const STORAGE_KEY_OUTFITS = 'lol_indore_outfits_v3';
+const STORAGE_KEY_OUTFITS = 'lol_indore_outfits_v4';
 const STORAGE_KEY_TASKS = 'lol_indore_tasks_v2';
 const STORAGE_KEY_WISHLIST = 'lol_indore_wishlist_v2';
-const STORAGE_KEY_SITE_SETTINGS = 'lol_indore_site_settings_v2';
+const STORAGE_KEY_SITE_SETTINGS = 'lol_indore_site_settings_v4';
 const STORAGE_KEY_TESTIMONIALS = 'lol_indore_testimonials_v2';
 const CATALOG_SYNC_CHANNEL = 'lol_indore_catalog_sync_v1';
 
@@ -950,7 +951,7 @@ export function App() {
             <div className="flex flex-wrap items-center gap-3.5">
               {siteSettings.bottomLogoUrl ? (
                 <img
-                  src={siteSettings.bottomLogoUrl}
+                  src={resolvePublicVideoPath(siteSettings.bottomLogoUrl)}
                   alt={siteSettings.brandTitle || 'LOL By Sanjeevani'}
                   style={{ height: `${siteSettings.bottomLogoHeight || 88}px` }}
                   className="w-auto object-contain bg-white rounded-xl p-2 border border-[#F8BBD0] transition-all duration-200"
@@ -1059,11 +1060,53 @@ export function App() {
               A Part of Sanj Group, Indore
             </span>
             <span className="inline-flex items-center justify-center bg-white rounded-lg px-2 py-1 border border-[#F8BBD0] shadow-2xs group-hover:border-[#D81B60] transition-colors">
-              <img
-                src="/sanj-group-logo.svg"
-                alt="Sanj Group of Properties Logo"
-                className="h-6 w-auto object-contain"
-              />
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 420 260"
+                fill="none"
+                className="h-6 w-auto"
+                role="img"
+                aria-label="Sanj Group of Properties Logo"
+              >
+                <g fill="#D62429">
+                  <path d="M303 82c-9 2-15 11-13 21 2 9 8 17 11 26 2 7 3 15 8 19 5 4 13 2 15-4 2-6-1-13-2-19-1-8 4-16 3-25-1-11-11-20-22-18z" />
+                  <ellipse cx="322" cy="69" rx="6" ry="8" transform="rotate(-10 322 69)" />
+                  <ellipse cx="310" cy="68" rx="4.2" ry="5.8" transform="rotate(-15 310 68)" />
+                  <ellipse cx="301" cy="72" rx="3.6" ry="5" transform="rotate(-20 301 72)" />
+                  <ellipse cx="294" cy="78" rx="3" ry="4.2" transform="rotate(-25 294 78)" />
+                  <ellipse cx="289" cy="85" rx="2.5" ry="3.5" transform="rotate(-30 289 85)" />
+                  <path d="M356 101c9 2 15 11 13 21-2 9-8 17-11 26-2 7-3 15-8 19-5 4-13 2-15-4-2-6 1-13 2-19 1-8-4-16-3-25 1-11 11-20 22-18z" />
+                  <ellipse cx="338" cy="89" rx="6" ry="8" transform="rotate(10 338 89)" />
+                  <ellipse cx="350" cy="88" rx="4.2" ry="5.8" transform="rotate(15 350 88)" />
+                  <ellipse cx="359" cy="92" rx="3.6" ry="5" transform="rotate(20 359 92)" />
+                  <ellipse cx="366" cy="98" rx="3" ry="4.2" transform="rotate(25 366 98)" />
+                  <ellipse cx="371" cy="105" rx="2.5" ry="3.5" transform="rotate(30 371 105)" />
+                </g>
+                <path
+                  d="M204 97c17 1 28-10 26-22-2-14-21-24-48-24-39 0-76 21-76 47 0 23 26 30 56 36 27 5 46 14 43 35-4 27-40 46-88 46-38 0-69-14-75-38-4-16 2-32 11-32 8 0 12 14 16 31 5 20 17 39 39 47"
+                  stroke="#0A0A0A"
+                  strokeWidth="11"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M251 141c-16 2-36 18-39 33-2 9 4 13 12 9 11-6 23-22 30-37l-8 34c-2 8 3 11 9 6 10-8 24-25 32-38l-16 47c4-14 21-38 34-39 8-1 10 6 8 15-3 12-1 19 6 19 9 0 21-12 31-26l-37 101c-6 17-14 25-18 22-4-3-1-15 6-27 14-24 46-52 84-78"
+                  stroke="#0A0A0A"
+                  strokeWidth="9.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <text
+                  x="38"
+                  y="228"
+                  fill="#0A0A0A"
+                  fontFamily="Georgia, 'Times New Roman', serif"
+                  fontSize="31"
+                  letterSpacing="0.2"
+                >
+                  Group of properties.
+                </text>
+              </svg>
             </span>
           </a>
         </div>

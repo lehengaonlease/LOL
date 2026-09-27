@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Heart, Shield } from 'lucide-react';
 import { VibeCategory, SiteSettings } from '../types';
+import { resolvePublicVideoPath } from './VideoPlayer';
 
 interface NavbarProps {
   activeView: 'catalog' | 'admin';
@@ -69,7 +70,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           {siteSettings.topLogoUrl ? (
             <img
-              src={siteSettings.topLogoUrl}
+              src={resolvePublicVideoPath(siteSettings.topLogoUrl)}
               alt={siteSettings.brandTitle || 'LOL Couture'}
               style={{ height: `${siteSettings.topLogoHeight || 64}px` }}
               className="w-auto max-h-14 sm:max-h-18 object-contain transition-all duration-200 mx-auto"

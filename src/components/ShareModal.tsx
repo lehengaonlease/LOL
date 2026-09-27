@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Copy, Check, Share2, Send, Sparkles } from 'lucide-react';
 import { LehengaOutfit } from '../types';
+import { resolvePublicVideoPath } from './VideoPlayer';
 
 interface ShareModalProps {
   outfit: LehengaOutfit | null;
@@ -80,7 +81,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ outfit, onClose }) => {
           <div className="rounded-xl overflow-hidden border border-[#1C1310]/10 bg-[#FAF8F5]">
             <div className="relative h-48 bg-[#EFECE6]">
               <img
-                src={outfit.mediaUrl}
+                src={resolvePublicVideoPath(outfit.mediaUrl)}
                 alt={outfit.title}
                 className="w-full h-full object-cover object-top"
               />
