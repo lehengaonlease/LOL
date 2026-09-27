@@ -28,6 +28,7 @@ import { LehengaOutfit, SiteSettings, DEFAULT_SITE_SETTINGS } from '../types';
 import { LolBrandLogo } from './LolBrandLogo';
 import { VideoPlayer } from './VideoPlayer';
 import { OptimizedImage } from './OptimizedImage';
+import { uploadMediaToCloud } from '../services/firebaseSyncService';
 
 interface AdminDashboardProps {
   outfits: LehengaOutfit[];
@@ -40,47 +41,9 @@ interface AdminDashboardProps {
   onBackToCatalog: () => void;
 }
 
-// Helper to upload a file to /uploads on backend
+// Helper to upload a file to cloud Firestore (and local backend if available) for instant Vercel sync
 async function uploadFileToBackend(file: File, prefix: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = async () => {
-      if (typeof reader.result !== 'string') {
-        reject(new Error('Failed to read file'));
-        return;
-      }
-      try {
-        if (prefix === 'hero-banner-video') {
-          const res = await fetch('/api/banner-video', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ videoDataUrl: reader.result }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            resolve(data.url);
-            return;
-          }
-        } else {
-          const res = await fetch('/api/upload-media', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ dataUrl: reader.result, prefix }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            resolve(data.url);
-            return;
-          }
-        }
-        resolve(reader.result);
-      } catch {
-        resolve(reader.result);
-      }
-    };
-    reader.onerror = () => reject(new Error('File read error'));
-    reader.readAsDataURL(file);
-  });
+  return uploadMediaToCloud(file, prefix);
 }
 
 interface EditableGridCardProps {

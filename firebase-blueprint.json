@@ -1,0 +1,81 @@
+{
+  "entities": {
+    "Outfit": {
+      "title": "LehengaOutfit",
+      "description": "A rental lehenga outfit in the LOL By Sanjeevani catalog",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "title": { "type": "string" },
+        "vibeCategory": { "type": "string" },
+        "pricePerDay": { "type": "number" },
+        "originalRetailPrice": { "type": "number" },
+        "description": { "type": "string" },
+        "ogHumorTagline": { "type": "string" },
+        "mediaUrl": { "type": "string" },
+        "mediaType": { "type": "string", "enum": ["image", "video"] },
+        "images": { "type": "array", "items": { "type": "string" } },
+        "videoUrl": { "type": "string" },
+        "sizes": { "type": "array", "items": { "type": "string" } },
+        "available": { "type": "boolean" },
+        "featured": { "type": "boolean" },
+        "sortOrder": { "type": "number" },
+        "updatedAt": { "type": "number" },
+        "writeToken": { "type": "string" }
+      },
+      "required": ["id", "code", "title", "pricePerDay", "writeToken"]
+    },
+    "StoreState": {
+      "title": "StoreState",
+      "description": "Global store configuration, catalog order, settings, and testimonials",
+      "type": "object",
+      "properties": {
+        "updatedAt": { "type": "number" },
+        "writeToken": { "type": "string" }
+      },
+      "required": ["updatedAt", "writeToken"]
+    },
+    "MediaAsset": {
+      "title": "MediaAsset",
+      "description": "Cloud-stored image or video metadata for instant cross-device delivery",
+      "type": "object",
+      "properties": {
+        "mimeType": { "type": "string" },
+        "totalChunks": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "writeToken": { "type": "string" }
+      },
+      "required": ["mimeType", "totalChunks", "createdAt", "writeToken"]
+    },
+    "MediaChunk": {
+      "title": "MediaChunk",
+      "description": "Base64 chunk of an uploaded media file",
+      "type": "object",
+      "properties": {
+        "index": { "type": "number" },
+        "data": { "type": "string" },
+        "writeToken": { "type": "string" }
+      },
+      "required": ["index", "data", "writeToken"]
+    }
+  },
+  "firestore": {
+    "/outfits/{outfitId}": {
+      "schema": { "$ref": "#/entities/Outfit" },
+      "description": "Individual lehenga outfits in the live catalog"
+    },
+    "/store_state/{docId}": {
+      "schema": { "$ref": "#/entities/StoreState" },
+      "description": "Global site settings, catalog order, and customer testimonials"
+    },
+    "/media_assets/{assetId}": {
+      "schema": { "$ref": "#/entities/MediaAsset" },
+      "description": "Uploaded videos and high-res media metadata"
+    },
+    "/media_assets/{assetId}/chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/MediaChunk" },
+      "description": "Binary base64 chunks for uploaded videos and media"
+    }
+  }
+}

@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function hasValidWriteToken() {
+      return request.resource.data.writeToken == 'lol-sanjeevani-studio-sync-v1';
+    }
+
+    match /outfits/{outfitId} {
+      allow get, list: if true;
+      allow create, update: if hasValidWriteToken()
+        && request.resource.data.id is string
+        && request.resource.data.title is string
+        && request.resource.data.pricePerDay is number;
+      allow delete: if true;
+    }
+
+    match /store_state/{docId} {
+      allow get, list: if true;
+      allow create, update: if hasValidWriteToken()
+        && request.resource.data.updatedAt is number;
+      allow delete: if false;
+    }
+
+    match /media_assets/{assetId} {
+      allow get, list: if true;
+      allow create, update: if hasValidWriteToken()
+        && request.resource.data.mimeType is string
+        && request.resource.data.totalChunks is number;
+      allow delete: if true;
+
+      match /chunks/{chunkId} {
+        allow get, list: if true;
+        allow create, update: if hasValidWriteToken()
+          && request.resource.data.index is number
+          && request.resource.data.data is string
+          && request.resource.data.data.size() <= 900000;
+        allow delete: if true;
+      }
+    }
+  }
+}

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { CustomerTestimonial } from '../types';
 import { OptimizedImage } from './OptimizedImage';
+import { uploadMediaToCloud } from '../services/firebaseSyncService';
 
 interface TestimonialSectionProps {
   testimonials: CustomerTestimonial[];
@@ -73,36 +74,14 @@ export const TestimonialSection: React.FC<TestimonialSectionProps> = ({
 
     setFormError(null);
     setIsUploadingPhoto(true);
-
-    const reader = new FileReader();
-    reader.onload = async () => {
-      if (typeof reader.result === 'string') {
-        const dataUrl = reader.result;
-        // Show instant preview
-        setPhotoUrl(dataUrl);
-        try {
-          const res = await fetch('/api/upload-media', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ dataUrl, prefix: 'client-review' }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.url) {
-              setPhotoUrl(data.url);
-            }
-          }
-        } catch {
-          // Keep base64 dataUrl if offline
-        }
-      }
+    try {
+      const cloudUrl = await uploadMediaToCloud(file, 'client-review');
+      setPhotoUrl(cloudUrl);
+    } catch {
+      setFormError('Could not upload the selected photo.');
+    } finally {
       setIsUploadingPhoto(false);
-    };
-    reader.onerror = () => {
-      setIsUploadingPhoto(false);
-      setFormError('Could not read the selected photo.');
-    };
-    reader.readAsDataURL(file);
+    }
   };
 
   const handleSubmitReview = (e: React.FormEvent) => {

@@ -6,6 +6,7 @@ import {
   BUNDLED_HERO_POSTER_DATA_URL,
   BUNDLED_VIDEO_MP4_BASE64,
 } from '../data/bundledAssets';
+import { resolveCloudMediaUrl } from '../services/firebaseSyncService';
 
 export interface VideoPlayerProps {
   src: string;
@@ -42,7 +43,7 @@ export function resolvePublicVideoPath(rawSrc: string): string {
   if (!rawSrc) return getBundledVideoBlobUrl();
   const trimmed = rawSrc.trim();
 
-  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:') || trimmed.startsWith('cloud-media://')) {
     return trimmed;
   }
 
@@ -92,11 +93,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   className = 'w-full h-full object-cover',
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [currentSrc, setCurrentSrc] = useState<string>(() => resolvePublicVideoPath(src));
+  const [currentSrc, setCurrentSrc] = useState<string>(() => {
+    const initial = resolvePublicVideoPath(src);
+    return initial.startsWith('cloud-media://') ? getBundledVideoBlobUrl() : initial;
+  });
   const resolvedPoster = poster ? resolvePublicVideoPath(poster) : undefined;
 
   useEffect(() => {
-    setCurrentSrc(resolvePublicVideoPath(src));
+    let active = true;
+    const resolved = resolvePublicVideoPath(src);
+    if (resolved.startsWith('cloud-media://')) {
+      resolveCloudMediaUrl(resolved).then((blobUrl) => {
+        if (active && blobUrl) {
+          setCurrentSrc(blobUrl);
+        }
+      });
+    } else {
+      setCurrentSrc(resolved);
+    }
+    return () => {
+      active = false;
+    };
   }, [src]);
 
   useEffect(() => {

@@ -5,6 +5,7 @@ import {
   BUNDLED_LEHENGA_IMG_2_DATA_URL,
   BUNDLED_HERO_POSTER_DATA_URL,
 } from '../data/bundledAssets';
+import { resolveCloudMediaUrl } from '../services/firebaseSyncService';
 
 export interface OptimizedImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   src: string;
@@ -26,7 +27,7 @@ export function resolveOptimizedImagePath(rawSrc?: string, isLogo = false): stri
 
   const trimmed = rawSrc.trim();
 
-  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:') || trimmed.startsWith('cloud-media://')) {
     return trimmed;
   }
 
@@ -77,12 +78,31 @@ export const OptimizedImage: React.FC<OptimizedImageProps> = ({
 }) => {
   const imgRef = useRef<HTMLImageElement | null>(null);
   const resolvedPrimary = resolveOptimizedImagePath(src, isLogo);
-  const [currentSrc, setCurrentSrc] = useState<string>(resolvedPrimary);
+  const [currentSrc, setCurrentSrc] = useState<string>(
+    resolvedPrimary.startsWith('cloud-media://')
+      ? isLogo
+        ? BUNDLED_LOGO_DATA_URL
+        : BUNDLED_LEHENGA_IMG_1_DATA_URL
+      : resolvedPrimary
+  );
   const [hasTriedFallback, setHasTriedFallback] = useState(false);
 
   useEffect(() => {
-    setCurrentSrc(resolveOptimizedImagePath(src, isLogo));
+    let active = true;
+    const nextResolved = resolveOptimizedImagePath(src, isLogo);
     setHasTriedFallback(false);
+    if (nextResolved.startsWith('cloud-media://')) {
+      resolveCloudMediaUrl(nextResolved).then((blobUrl) => {
+        if (active && blobUrl) {
+          setCurrentSrc(blobUrl);
+        }
+      });
+    } else {
+      setCurrentSrc(nextResolved);
+    }
+    return () => {
+      active = false;
+    };
   }, [src, isLogo]);
 
   const handleError = () => {

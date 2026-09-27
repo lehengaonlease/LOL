@@ -36,6 +36,13 @@ import { TestimonialSection } from './components/TestimonialSection';
 import { FaqModal } from './components/FaqModal';
 import { OptimizedImage } from './components/OptimizedImage';
 import {
+  subscribeToLiveStore,
+  saveOutfitToCloud,
+  deleteOutfitFromCloud,
+  saveSiteSettingsToCloud,
+  saveTestimonialsToCloud,
+} from './services/firebaseSyncService';
+import {
   requestGoogleTasksToken,
   getStoredAccessToken,
   ensureLolTaskList,
@@ -230,64 +237,44 @@ export function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, [outfits]);
 
-  // Real-time (<1s) sync of outfits, site settings, and testimonials across tabs and server
+  // Real-time (<1s) cloud sync via Firebase Firestore + cross-tab BroadcastChannel
   useEffect(() => {
-    const initialDefaultJson = JSON.stringify(INITIAL_OUTFITS);
-
-    const fetchLatestOutfits = () => {
-      fetch('/api/outfits')
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
-          if (Array.isArray(data)) {
-            setOutfits((prev) => {
-              const prevJson = JSON.stringify(prev);
-              const nextJson = JSON.stringify(data);
-              // If the server just cold-started with default INITIAL_OUTFITS while localStorage has user-customized outfits, restore localStorage to server
-              if (nextJson === initialDefaultJson && prevJson !== initialDefaultJson) {
-                fetch('/api/outfits/sync', {
-                  method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ outfits: prev }),
-                }).catch(() => {});
-                return prev;
-              }
-              if (prevJson !== nextJson) {
-                try {
-                  localStorage.setItem(STORAGE_KEY_OUTFITS, nextJson);
-                } catch {}
-                return data;
-              }
-              return prev;
-            });
-          }
-        })
-        .catch(() => {});
-    };
-
-    fetchLatestOutfits();
-
-    fetch('/api/settings')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data) {
-          const merged = { ...DEFAULT_SITE_SETTINGS, ...data };
-          setSiteSettings(merged);
+    const unsubscribeFirestore = subscribeToLiveStore({
+      initialOutfits: outfits,
+      initialSettings: siteSettings,
+      initialTestimonials: testimonials,
+      onOutfitsChange: (liveOutfits) => {
+        setOutfits(liveOutfits);
+        setInspectOutfit((prevInspect) => {
+          if (!prevInspect) return null;
+          return liveOutfits.find((o) => o.id === prevInspect.id) || prevInspect;
+        });
+        try {
+          localStorage.setItem(STORAGE_KEY_OUTFITS, JSON.stringify(liveOutfits));
+        } catch {
+          // ignore
+        }
+      },
+      onSettingsChange: (liveSettings) => {
+        const merged = { ...DEFAULT_SITE_SETTINGS, ...liveSettings };
+        setSiteSettings(merged);
+        try {
           localStorage.setItem(STORAGE_KEY_SITE_SETTINGS, JSON.stringify(merged));
+        } catch {
+          // ignore
         }
-      })
-      .catch(() => {});
-
-    fetch('/api/testimonials')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (Array.isArray(data)) {
-          setTestimonials(data);
-          localStorage.setItem(STORAGE_KEY_TESTIMONIALS, JSON.stringify(data));
+      },
+      onTestimonialsChange: (liveTestimonials) => {
+        setTestimonials(liveTestimonials);
+        try {
+          localStorage.setItem(STORAGE_KEY_TESTIMONIALS, JSON.stringify(liveTestimonials));
+        } catch {
+          // ignore
         }
-      })
-      .catch(() => {});
+      },
+    });
 
-    // Listen to BroadcastChannel for instant (<50ms) cross-tab updates
+    // Listen to BroadcastChannel for instant (<50ms) same-browser cross-tab updates
     let channel: BroadcastChannel | null = null;
     try {
       if (typeof BroadcastChannel !== 'undefined') {
@@ -295,6 +282,9 @@ export function App() {
         channel.onmessage = (event) => {
           if (event.data?.type === 'CATALOG_UPDATED' && Array.isArray(event.data.outfits)) {
             setOutfits(event.data.outfits);
+          }
+          if (event.data?.type === 'SETTINGS_UPDATED' && event.data.settings) {
+            setSiteSettings({ ...DEFAULT_SITE_SETTINGS, ...event.data.settings });
           }
         };
       }
@@ -327,12 +317,9 @@ export function App() {
     };
     window.addEventListener('storage', handleStorage);
 
-    // Poll backend every 900ms so any published outfit is visible within 1 second
-    const pollInterval = window.setInterval(fetchLatestOutfits, 900);
-
     return () => {
+      unsubscribeFirestore();
       window.removeEventListener('storage', handleStorage);
-      window.clearInterval(pollInterval);
       if (channel) channel.close();
     };
   }, []);
@@ -346,11 +333,9 @@ export function App() {
       // ignore
     }
     try {
-      await fetch(`/api/testimonials/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-      });
-    } catch {
-      // fallback to localStorage
+      await saveTestimonialsToCloud(updated);
+    } catch (err) {
+      console.error('Failed to sync deleted testimonial to cloud:', err);
     }
   };
 
@@ -363,19 +348,9 @@ export function App() {
       // ignore
     }
     try {
-      const res = await fetch('/api/testimonials', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newTestimonial),
-      });
-      if (res.ok) {
-        const saved = await res.json();
-        setTestimonials((prev) =>
-          prev.map((item) => (item.id === newTestimonial.id ? saved : item))
-        );
-      }
-    } catch {
-      // fallback to localStorage
+      await saveTestimonialsToCloud(updated);
+    } catch (err) {
+      console.error('Failed to sync new testimonial to cloud:', err);
     }
   };
 
@@ -442,23 +417,9 @@ export function App() {
       // ignore
     }
     try {
-      const res = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(nextSettings),
-      });
-      if (res.ok) {
-        const saved = await res.json();
-        setSiteSettings(saved);
-        localStorage.setItem(STORAGE_KEY_SITE_SETTINGS, JSON.stringify(saved));
-        if (typeof BroadcastChannel !== 'undefined') {
-          const channel = new BroadcastChannel(CATALOG_SYNC_CHANNEL);
-          channel.postMessage({ type: 'SETTINGS_UPDATED', settings: saved });
-          channel.close();
-        }
-      }
-    } catch {
-      // fallback to localStorage
+      await saveSiteSettingsToCloud(nextSettings);
+    } catch (err) {
+      console.error('Failed to sync site settings to cloud:', err);
     }
   };
 
@@ -648,76 +609,44 @@ export function App() {
               setSelectedVibe('All Vibes');
               setSearchQuery('');
               setShowWishlistOnly(false);
-              setOutfits((prev) => {
-                const updated = [newOutfit, ...prev];
-                broadcastCatalogUpdate(updated);
-                return updated;
-              });
+              const nextOutfits = [newOutfit, ...outfits];
+              setOutfits(nextOutfits);
+              broadcastCatalogUpdate(nextOutfits);
               try {
-                const res = await fetch('/api/outfits', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'x-admin-password': 'sanjeevani',
-                  },
-                  body: JSON.stringify(newOutfit),
-                });
-                if (res.ok) {
-                  const saved = await res.json();
-                  setOutfits((prev) => {
-                    const synced = prev.map((o) => (o.id === newOutfit.id ? saved : o));
-                    broadcastCatalogUpdate(synced);
-                    return synced;
-                  });
-                }
-              } catch {
-                // fallback to local state
+                await saveOutfitToCloud(
+                  newOutfit,
+                  nextOutfits.map((o) => o.id)
+                );
+              } catch (err) {
+                console.error('Failed to sync new outfit to cloud:', err);
               }
             }}
             onUpdateOutfit={async (updatedOutfit) => {
-              setOutfits((prev) => {
-                const updated = prev.map((o) =>
-                  o.id === updatedOutfit.id ? updatedOutfit : o
-                );
-                broadcastCatalogUpdate(updated);
-                return updated;
-              });
+              const nextOutfits = outfits.map((o) =>
+                o.id === updatedOutfit.id ? updatedOutfit : o
+              );
+              setOutfits(nextOutfits);
+              broadcastCatalogUpdate(nextOutfits);
               try {
-                const res = await fetch(`/api/outfits/${encodeURIComponent(updatedOutfit.id)}`, {
-                  method: 'PATCH',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'x-admin-password': 'sanjeevani',
-                  },
-                  body: JSON.stringify(updatedOutfit),
-                });
-                if (res.ok) {
-                  const saved = await res.json();
-                  setOutfits((prev) => {
-                    const synced = prev.map((o) => (o.id === updatedOutfit.id ? saved : o));
-                    broadcastCatalogUpdate(synced);
-                    return synced;
-                  });
-                }
-              } catch {
-                // fallback to local state
+                await saveOutfitToCloud(
+                  updatedOutfit,
+                  nextOutfits.map((o) => o.id)
+                );
+              } catch (err) {
+                console.error('Failed to sync updated outfit to cloud:', err);
               }
             }}
             onDeleteOutfit={async (id) => {
-              setOutfits((prev) => {
-                const updated = prev.filter((o) => o.id !== id);
-                broadcastCatalogUpdate(updated);
-                return updated;
-              });
+              const nextOutfits = outfits.filter((o) => o.id !== id);
+              setOutfits(nextOutfits);
+              broadcastCatalogUpdate(nextOutfits);
               try {
-                await fetch(`/api/outfits/${encodeURIComponent(id)}`, {
-                  method: 'DELETE',
-                  headers: {
-                    'x-admin-password': 'sanjeevani',
-                  },
-                });
-              } catch {
-                // fallback to local state
+                await deleteOutfitFromCloud(
+                  id,
+                  nextOutfits.map((o) => o.id)
+                );
+              } catch (err) {
+                console.error('Failed to sync deleted outfit to cloud:', err);
               }
             }}
             onResetCatalog={() => {}}
