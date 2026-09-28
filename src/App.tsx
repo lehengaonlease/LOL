@@ -22,6 +22,8 @@ import {
   SiteSettings,
   DEFAULT_SITE_SETTINGS,
   CustomerTestimonial,
+  normalizeStudioWhatsAppDisplay,
+  formatWhatsAppUrlNumber,
 } from './types';
 import { Navbar } from './components/Navbar';
 import { HeroSection } from './components/HeroSection';
@@ -115,6 +117,7 @@ export function App() {
         ) {
           parsed.footerDescription = DEFAULT_SITE_SETTINGS.footerDescription;
         }
+        parsed.whatsappNumber = normalizeStudioWhatsAppDisplay(parsed.whatsappNumber);
         return { ...DEFAULT_SITE_SETTINGS, ...parsed };
       }
     } catch {
@@ -256,7 +259,11 @@ export function App() {
         }
       },
       onSettingsChange: (liveSettings) => {
-        const merged = { ...DEFAULT_SITE_SETTINGS, ...liveSettings };
+        const merged = {
+          ...DEFAULT_SITE_SETTINGS,
+          ...liveSettings,
+          whatsappNumber: normalizeStudioWhatsAppDisplay(liveSettings.whatsappNumber),
+        };
         setSiteSettings(merged);
         try {
           localStorage.setItem(STORAGE_KEY_SITE_SETTINGS, JSON.stringify(merged));
@@ -956,7 +963,7 @@ export function App() {
           <div className="md:col-span-3 space-y-3">
             <div className="flex flex-col items-start gap-2.5">
               <a
-                href={`https://wa.me/${siteSettings.whatsappNumber || '919826000000'}?text=Hi%20LOL%20By%20Sanjeevani!%20I%20would%20like%20to%20book%20a%20lehenga%20trial%20in%20Indore.`}
+                href={`https://wa.me/${formatWhatsAppUrlNumber(siteSettings.whatsappNumber)}?text=Hi%20LOL%20By%20Sanjeevani!%20I%20would%20like%20to%20book%20a%20lehenga%20trial%20in%20Indore.`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center justify-center gap-2 w-48 px-5 py-3 rounded-xl bg-[#D81B60] text-white text-xs uppercase tracking-wider font-semibold hover:bg-[#AD1457] transition-all shadow-sm"
@@ -1048,6 +1055,7 @@ export function App() {
         onClose={() => setRentalOutfit(null)}
         onConfirmBooking={handleConfirmBooking}
         isTasksConnected={Boolean(googleAccessToken)}
+        whatsappNumber={siteSettings.whatsappNumber}
       />
 
       {/* Social & WhatsApp Share Modal */}

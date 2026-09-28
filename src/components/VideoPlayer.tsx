@@ -64,7 +64,7 @@ export function resolvePublicVideoPath(rawSrc: string): string {
   }
 
   if (trimmed.includes('hero-poster')) {
-    return BUNDLED_HERO_POSTER_DATA_URL;
+    return '/hero-poster.jpg';
   }
 
   if (
@@ -72,7 +72,7 @@ export function resolvePublicVideoPath(rawSrc: string): string {
     trimmed.includes('lehenga-reel.mp4') ||
     trimmed.includes('lehenga-video-')
   ) {
-    return getBundledVideoBlobUrl();
+    return '/hero-banner.mp4';
   }
 
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {

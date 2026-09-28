@@ -50,7 +50,7 @@ export function resolveOptimizedImagePath(rawSrc?: string, isLogo = false): stri
   }
 
   if (trimmed.includes('hero-poster')) {
-    return BUNDLED_HERO_POSTER_DATA_URL;
+    return '/hero-poster.jpg';
   }
 
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {

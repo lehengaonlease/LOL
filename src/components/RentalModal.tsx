@@ -10,7 +10,7 @@ import {
   User,
   ShieldCheck,
 } from 'lucide-react';
-import { LehengaOutfit, RentalBookingDraft } from '../types';
+import { LehengaOutfit, RentalBookingDraft, formatWhatsAppUrlNumber } from '../types';
 import { OptimizedImage } from './OptimizedImage';
 
 interface RentalModalProps {
@@ -18,9 +18,10 @@ interface RentalModalProps {
   onClose: () => void;
   onConfirmBooking: (booking: RentalBookingDraft, syncToGoogleTasks: boolean) => Promise<void>;
   isTasksConnected: boolean;
+  whatsappNumber?: string;
 }
 
-const STUDIO_WHATSAPP_NUMBER = '919826000000';
+const STUDIO_WHATSAPP_NUMBER = '7000861465';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'June', 'July', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec'];
@@ -47,6 +48,7 @@ export const RentalModal: React.FC<RentalModalProps> = ({
   outfit,
   onClose,
   onConfirmBooking,
+  whatsappNumber,
 }) => {
   const tomorrowStr = useMemo(() => {
     const d = new Date();
@@ -138,7 +140,8 @@ export const RentalModal: React.FC<RentalModalProps> = ({
       `Please share your available trial and Pickup slots so I can lock this look in! ✨🧡`,
     ].join('\n');
 
-    return `https://wa.me/${STUDIO_WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
+    const targetNumber = formatWhatsAppUrlNumber(whatsappNumber || STUDIO_WHATSAPP_NUMBER);
+    return `https://wa.me/${targetNumber}?text=${encodeURIComponent(message)}`;
   }, [
     outfit,
     rentalDays,
@@ -147,6 +150,7 @@ export const RentalModal: React.FC<RentalModalProps> = ({
     returnDateInfo.dateOnly,
     customerName,
     customerPhone,
+    whatsappNumber,
   ]);
 
   if (!outfit) return null;
@@ -322,7 +326,7 @@ export const RentalModal: React.FC<RentalModalProps> = ({
                     type="tel"
                     value={customerPhone}
                     onChange={(e) => setCustomerPhone(e.target.value)}
-                    placeholder="+91 98260 XXXXX"
+                    placeholder="e.g., 7000861465"
                     className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#1C1310]/15 rounded-xl text-xs text-[#1C1310] focus:outline-none focus:bg-white focus:border-[#1C1310]"
                   />
                 </div>

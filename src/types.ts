@@ -62,6 +62,22 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
     "Every piece is custom-fitted to survive your wildest Garba steps, Heavy mirror work, vibrant traditional prints, and massive custom-altered flares that demand a slow-mo reel. Sanitized, perfectly fitted to your waist, and ready to sweep Indore's biggest grounds.",
 };
 
+export function normalizeStudioWhatsAppDisplay(raw?: string): string {
+  const digits = (raw || '').replace(/\D/g, '');
+  if (!digits || digits.includes('9826000000')) {
+    return '7000861465';
+  }
+  if (digits.length === 12 && digits.startsWith('91')) {
+    return digits.slice(2);
+  }
+  return digits;
+}
+
+export function formatWhatsAppUrlNumber(raw?: string): string {
+  const display = normalizeStudioWhatsAppDisplay(raw);
+  return display.length === 10 ? `91${display}` : display;
+}
+
 export interface RentalBooking {
   id: string;
   outfitId: string;

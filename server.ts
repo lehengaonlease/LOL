@@ -121,7 +121,7 @@ function loadBookings(): RentalBooking[] {
       returnDate: '2026-10-05',
       pickupTime: '01:00 PM - Afternoon Slay',
       customerName: 'Aashna Jain (Vijay Nagar)',
-      customerPhone: '+91 98260 44112',
+      customerPhone: '+91 70008 61465',
       promisedNextDayReturn: true,
       createdAt: '2026-09-26T06:30:00.000Z',
       syncedToGoogleTasks: false,

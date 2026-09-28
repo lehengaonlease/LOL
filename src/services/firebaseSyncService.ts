@@ -28,7 +28,7 @@ const inflightMediaPromises = new Map<string, Promise<string>>();
  * Compresses an image File in the browser using HTML5 Canvas to crisp WebP
  * so it uploads and syncs across all devices in milliseconds.
  */
-async function compressImageFileToDataUrl(file: File, maxDimension = 1280): Promise<string> {
+async function compressImageFileToDataUrl(file: File, maxDimension = 1920): Promise<string> {
   if (file.type === 'image/svg+xml') {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -63,7 +63,7 @@ async function compressImageFileToDataUrl(file: File, maxDimension = 1280): Prom
           return;
         }
         ctx.drawImage(img, 0, 0, width, height);
-        const webpDataUrl = canvas.toDataURL('image/webp', 0.84);
+        const webpDataUrl = canvas.toDataURL('image/webp', 0.92);
         URL.revokeObjectURL(objectUrl);
         resolve(webpDataUrl);
       } catch (err) {
