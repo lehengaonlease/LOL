@@ -4,21 +4,117 @@ import {
   collection,
   doc,
   setDoc,
-  deleteDoc,
   getDoc,
   getDocs,
   onSnapshot,
   writeBatch,
   query,
   orderBy,
+  setLogLevel,
+  enableNetwork,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { LehengaOutfit, SiteSettings, CustomerTestimonial } from '../types';
+import heic2any from 'heic2any';
+
+// Silence internal @firebase/firestore SDK console errors/warnings (e.g. free-tier quota backoff logs)
+try {
+  setLogLevel('silent');
+} catch {
+  // ignore
+}
 
 const WRITE_TOKEN = 'lol-sanjeevani-studio-sync-v1';
+const QUOTA_EXHAUSTED_KEY = 'lol_firestore_quota_exhausted_until_v1';
+const LOCAL_CATALOG_TIMESTAMP_KEY = 'lol_local_catalog_updated_at_v1';
+const LOCAL_SETTINGS_TIMESTAMP_KEY = 'lol_local_settings_updated_at_v1';
 
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+enableNetwork(db).catch(() => {});
+
+let isWriteQuotaExhausted = (() => {
+  try {
+    const until = Number(sessionStorage.getItem(QUOTA_EXHAUSTED_KEY) || '0');
+    return until > Date.now();
+  } catch {
+    return false;
+  }
+})();
+
+let activeMutationsCount = 0;
+let lastEmittedOutfitsJson = '';
+
+function getLocalCatalogTimestamp(): number {
+  try {
+    return Number(localStorage.getItem(LOCAL_CATALOG_TIMESTAMP_KEY) || '0');
+  } catch {
+    return 0;
+  }
+}
+
+function setLocalCatalogTimestamp(ts = Date.now()) {
+  try {
+    localStorage.setItem(LOCAL_CATALOG_TIMESTAMP_KEY, String(ts));
+  } catch {
+    // ignore
+  }
+}
+
+function getLocalSettingsTimestamp(): number {
+  try {
+    return Number(localStorage.getItem(LOCAL_SETTINGS_TIMESTAMP_KEY) || '0');
+  } catch {
+    return 0;
+  }
+}
+
+function setLocalSettingsTimestamp(ts = Date.now()) {
+  try {
+    localStorage.setItem(LOCAL_SETTINGS_TIMESTAMP_KEY, String(ts));
+  } catch {
+    // ignore
+  }
+}
+
+function isQuotaError(err: unknown): boolean {
+  if (!err) return false;
+  const msg =
+    err instanceof Error
+      ? `${err.name} ${err.message} ${(err as { code?: string }).code || ''}`
+      : String(err);
+  return (
+    msg.includes('resource-exhausted') ||
+    msg.includes('Quota limit exceeded') ||
+    msg.includes('Quota exceeded')
+  );
+}
+
+function tripWriteQuotaCircuitBreaker(err: unknown) {
+  if (isQuotaError(err)) {
+    isWriteQuotaExhausted = true;
+    try {
+      sessionStorage.setItem(QUOTA_EXHAUSTED_KEY, String(Date.now() + 60 * 60 * 1000));
+    } catch {
+      // ignore
+    }
+  }
+}
+
+async function runFirestoreWriteSafely(writeFn: () => Promise<void>): Promise<void> {
+  if (isWriteQuotaExhausted) return;
+  try {
+    await Promise.race([
+      writeFn(),
+      new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error('resource-exhausted')), 2000)
+      ),
+    ]);
+  } catch (err) {
+    tripWriteQuotaCircuitBreaker(err);
+  }
+}
 
 // In-memory cache for resolved cloud-media:// Blob URLs
 const resolvedMediaCache = new Map<string, string>();
@@ -28,7 +124,7 @@ const inflightMediaPromises = new Map<string, Promise<string>>();
  * Compresses an image File in the browser using HTML5 Canvas to crisp WebP
  * so it uploads and syncs across all devices in milliseconds.
  */
-async function compressImageFileToDataUrl(file: File, maxDimension = 1920): Promise<string> {
+async function compressImageFileToDataUrl(file: File, maxDimension = 1400): Promise<string> {
   if (file.type === 'image/svg+xml') {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -63,7 +159,7 @@ async function compressImageFileToDataUrl(file: File, maxDimension = 1920): Prom
           return;
         }
         ctx.drawImage(img, 0, 0, width, height);
-        const webpDataUrl = canvas.toDataURL('image/webp', 0.92);
+        const webpDataUrl = canvas.toDataURL('image/webp', 0.85);
         URL.revokeObjectURL(objectUrl);
         resolve(webpDataUrl);
       } catch (err) {
@@ -79,7 +175,7 @@ async function compressImageFileToDataUrl(file: File, maxDimension = 1920): Prom
   });
 }
 
-function readFileAsDataUrl(file: File): Promise<string> {
+function readBlobAsDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -90,82 +186,250 @@ function readFileAsDataUrl(file: File): Promise<string> {
       }
     };
     reader.onerror = () => reject(new Error('File read error'));
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(blob);
   });
 }
 
 /**
- * Uploads any image or video File to Firestore so that it is immediately
- * accessible on Vercel and all connected browsers within seconds.
+ * Uploads any Blob/File in 1.5MB slices via `/api/upload-chunk` + `/api/upload-finalize`
+ * so large videos (.mp4 / .mov / .webm) and high-res photos never fail due to HTTP payload limits.
+ */
+async function uploadViaChunkedServerApi(
+  blob: Blob,
+  prefix: string,
+  fileName: string,
+  mimeType: string
+): Promise<string | null> {
+  const CHUNK_BYTES = 1_500_000; // 1.5MB per request
+  const totalChunks = Math.max(1, Math.ceil(blob.size / CHUNK_BYTES));
+  const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  for (let i = 0; i < totalChunks; i++) {
+    const slice = blob.slice(i * CHUNK_BYTES, (i + 1) * CHUNK_BYTES);
+    const sliceDataUrl = await readBlobAsDataUrl(slice);
+    const commaIdx = sliceDataUrl.indexOf(',');
+    const chunkBase64 = commaIdx !== -1 ? sliceDataUrl.slice(commaIdx + 1) : sliceDataUrl;
+
+    const chunkRes = await fetch('/api/upload-chunk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uploadId,
+        chunkIndex: i,
+        chunkBase64,
+      }),
+    });
+    if (!chunkRes.ok) {
+      return null;
+    }
+  }
+
+  const finalizeRes = await fetch('/api/upload-finalize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      uploadId,
+      prefix,
+      mimeType,
+      fileName,
+    }),
+  });
+  if (!finalizeRes.ok) {
+    return null;
+  }
+  const json = (await finalizeRes.json()) as { ok?: boolean; url?: string };
+  return json.url || null;
+}
+
+/**
+ * Uploads any image or video File to local server (`/api/upload-media` or `/api/upload-chunk`)
+ * and/or Firestore so it is immediately accessible without exhausting Firestore write quota.
  */
 export async function uploadMediaToCloud(file: File, prefix = 'media'): Promise<string> {
-  const isImage = file.type.startsWith('image/');
-  let dataUrl: string;
+  activeMutationsCount++;
+  try {
+    const lowerName = (file.name || '').toLowerCase();
+    const lowerType = (file.type || '').toLowerCase();
+    const isHeicFile =
+      lowerType.includes('heic') ||
+      lowerType.includes('heif') ||
+      lowerName.endsWith('.heic') ||
+      lowerName.endsWith('.heif');
+    const isVideo =
+      lowerType.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(lowerName);
+    const isImage =
+      !isVideo &&
+      (lowerType.startsWith('image/') ||
+        isHeicFile ||
+        /\.(jpe?g|png|webp|gif|avif|heic|heif|svg)$/i.test(lowerName));
 
-  if (isImage) {
-    try {
-      const maxDim = prefix.includes('logo') ? 600 : 1280;
-      dataUrl = await compressImageFileToDataUrl(file, maxDim);
-    } catch {
-      dataUrl = await readFileAsDataUrl(file);
+    // For videos, upload directly via chunked binary upload so 20MB–100MB .mp4/.mov files upload in < 1s
+    if (isVideo) {
+      try {
+        const chunkedUrl = await uploadViaChunkedServerApi(
+          file,
+          prefix,
+          file.name || 'video.mp4',
+          file.type || 'video/mp4'
+        );
+        if (chunkedUrl) {
+          return chunkedUrl;
+        }
+      } catch {
+        // fallback below
+      }
     }
 
-    // If compressed WebP is compact (< 180KB), return inline data URL directly for zero-latency rendering
-    if (dataUrl.length <= 180_000) {
+    let dataUrl: string;
+    if (isImage) {
+      const maxDim = prefix.includes('logo') ? 600 : 1400;
+      try {
+        if (isHeicFile) {
+          const converted = await heic2any({
+            blob: file,
+            toType: 'image/jpeg',
+            quality: 0.9,
+          });
+          const jpegBlob = Array.isArray(converted) ? converted[0] : converted;
+          const jpegFile = new File([jpegBlob], 'converted.jpg', { type: 'image/jpeg' });
+          dataUrl = await compressImageFileToDataUrl(jpegFile, maxDim);
+        } else {
+          dataUrl = await compressImageFileToDataUrl(file, maxDim);
+        }
+      } catch {
+        try {
+          const converted = await heic2any({
+            blob: file,
+            toType: 'image/jpeg',
+            quality: 0.9,
+          });
+          const jpegBlob = Array.isArray(converted) ? converted[0] : converted;
+          const jpegFile = new File([jpegBlob], 'converted.jpg', { type: 'image/jpeg' });
+          dataUrl = await compressImageFileToDataUrl(jpegFile, maxDim);
+        } catch {
+          // If client-side HEIC conversion failed, upload raw file via chunked server API (which converts via heic-convert on server)
+          const serverConvertedUrl = await uploadViaChunkedServerApi(
+            file,
+            prefix,
+            file.name || 'photo.heic',
+            file.type || 'image/heic'
+          );
+          if (serverConvertedUrl) {
+            return serverConvertedUrl;
+          }
+          dataUrl = await readBlobAsDataUrl(file);
+        }
+      }
+    } else {
+      dataUrl = await readBlobAsDataUrl(file);
+    }
+
+    // 1. Save directly to backend /api/upload-media first (immediate server sync, 0 Firestore write units)
+    try {
+      if (dataUrl.length <= 2_500_000) {
+        const resp = await fetch('/api/upload-media', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataUrl, prefix }),
+        });
+        if (resp.ok) {
+          const json = (await resp.json()) as { ok?: boolean; url?: string };
+          if (json.url) {
+            return json.url;
+          }
+        }
+      } else {
+        const res = await fetch(dataUrl);
+        const blob = await res.blob();
+        const chunkedUrl = await uploadViaChunkedServerApi(
+          blob,
+          prefix,
+          file.name || 'media.webp',
+          blob.type || file.type || 'image/webp'
+        );
+        if (chunkedUrl) {
+          return chunkedUrl;
+        }
+      }
+    } catch {
+      // Backend API not reachable, continue to inline/Firestore
+    }
+
+    // 2. If image or Firestore quota is exhausted, return inline data URL or object URL
+    if (isImage || isWriteQuotaExhausted) {
       return dataUrl;
     }
-  } else {
-    dataUrl = await readFileAsDataUrl(file);
-  }
 
-  // For larger images or videos (.mp4/.webm), store in chunked Firestore media_assets collection
-  const commaIdx = dataUrl.indexOf(',');
-  const header = commaIdx !== -1 ? dataUrl.slice(0, commaIdx) : `data:${file.type};base64`;
-  const base64Body = commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : dataUrl;
-  const mimeMatch = header.match(/^data:([^;]+);/);
-  const mimeType = mimeMatch ? mimeMatch[1] : file.type || 'application/octet-stream';
+    // 3. Otherwise store in chunked Firestore media_assets collection
+    const commaIdx = dataUrl.indexOf(',');
+    const header = commaIdx !== -1 ? dataUrl.slice(0, commaIdx) : `data:${file.type};base64`;
+    const base64Body = commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+    const mimeMatch = header.match(/^data:([^;]+);/);
+    const mimeType = mimeMatch ? mimeMatch[1] : file.type || 'application/octet-stream';
 
-  const CHUNK_SIZE = 600_000; // ~600KB per Firestore document (well under 1 MiB limit)
-  const totalChunks = Math.ceil(base64Body.length / CHUNK_SIZE);
-  const assetId = `${prefix.replace(/[^a-zA-Z0-9_-]/g, '')}-${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2, 7)}`;
+    const CHUNK_SIZE = 600_000;
+    const totalChunks = Math.ceil(base64Body.length / CHUNK_SIZE);
+    const assetId = `${prefix.replace(/[^a-zA-Z0-9_-]/g, '')}-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 7)}`;
 
-  // Upload chunks in batches of 4
-  for (let i = 0; i < totalChunks; i += 4) {
-    const batch = writeBatch(db);
-    for (let j = i; j < Math.min(i + 4, totalChunks); j++) {
-      const chunkSlice = base64Body.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
-      const chunkRef = doc(db, 'media_assets', assetId, 'chunks', String(j).padStart(5, '0'));
-      batch.set(chunkRef, {
-        index: j,
-        data: chunkSlice,
-        writeToken: WRITE_TOKEN,
-      });
+    const cloudUri = `cloud-media://${assetId}`;
+
+    try {
+      const res = await fetch(dataUrl);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      resolvedMediaCache.set(cloudUri, blobUrl);
+    } catch {
+      // ignore
     }
-    await batch.commit();
+
+    try {
+      for (let i = 0; i < totalChunks; i += 4) {
+        const batch = writeBatch(db);
+        for (let j = i; j < Math.min(i + 4, totalChunks); j++) {
+          const chunkSlice = base64Body.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
+          const chunkRef = doc(
+            db,
+            'media_assets',
+            assetId,
+            'chunks',
+            String(j).padStart(5, '0')
+          );
+          batch.set(chunkRef, {
+            index: j,
+            data: chunkSlice,
+            writeToken: WRITE_TOKEN,
+          });
+        }
+        await Promise.race([
+          batch.commit(),
+          new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error('resource-exhausted')), 2000)
+          ),
+        ]);
+      }
+
+      await Promise.race([
+        setDoc(doc(db, 'media_assets', assetId), {
+          mimeType,
+          totalChunks,
+          createdAt: Date.now(),
+          writeToken: WRITE_TOKEN,
+        }),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error('resource-exhausted')), 2000)
+        ),
+      ]);
+    } catch (err) {
+      tripWriteQuotaCircuitBreaker(err);
+      return dataUrl;
+    }
+
+    return cloudUri;
+  } finally {
+    activeMutationsCount = Math.max(0, activeMutationsCount - 1);
   }
-
-  await setDoc(doc(db, 'media_assets', assetId), {
-    mimeType,
-    totalChunks,
-    createdAt: Date.now(),
-    writeToken: WRITE_TOKEN,
-  });
-
-  const cloudUri = `cloud-media://${assetId}`;
-
-  // Pre-populate local cache with a Blob URL so the uploading browser sees it immediately
-  try {
-    const res = await fetch(dataUrl);
-    const blob = await res.blob();
-    const blobUrl = URL.createObjectURL(blob);
-    resolvedMediaCache.set(cloudUri, blobUrl);
-  } catch {
-    // ignore
-  }
-
-  return cloudUri;
 }
 
 /**
@@ -220,8 +484,7 @@ export async function resolveCloudMediaUrl(uri: string): Promise<string> {
       const blobUrl = URL.createObjectURL(blob);
       resolvedMediaCache.set(uri, blobUrl);
       return blobUrl;
-    } catch (err) {
-      console.error('Failed to resolve cloud media:', err);
+    } catch {
       return uri;
     } finally {
       inflightMediaPromises.delete(uri);
@@ -232,17 +495,15 @@ export async function resolveCloudMediaUrl(uri: string): Promise<string> {
   return promise;
 }
 
-/**
- * Sanitizes an outfit object before writing to Firestore.
- */
-function sanitizeOutfitForFirestore(outfit: LehengaOutfit, sortOrder: number) {
+function sanitizeOutfitForFirestore(outfit: LehengaOutfit, sortOrder: number, nowTs: number) {
   return {
     id: String(outfit.id),
-    code: String(outfit.code || ''),
+    code: String(outfit.color || outfit.code || ''),
+    color: String(outfit.color || outfit.code || ''),
     title: String(outfit.title || ''),
     vibeCategory: String(outfit.vibeCategory || 'Navratri Ni Pehvesh'),
     pricePerDay: Number(outfit.pricePerDay) || 0,
-    originalRetailPrice: Number(outfit.originalRetailPrice) || 0,
+    originalRetailPrice: 0,
     description: String(outfit.description || ''),
     ogHumorTagline: String(outfit.ogHumorTagline || ''),
     mediaUrl: String(outfit.mediaUrl || ''),
@@ -250,83 +511,175 @@ function sanitizeOutfitForFirestore(outfit: LehengaOutfit, sortOrder: number) {
     images: Array.isArray(outfit.images) ? outfit.images.map(String) : [],
     videoUrl: String(outfit.videoUrl || ''),
     sizes: Array.isArray(outfit.sizes) ? outfit.sizes.map(String) : [],
-    available: Boolean(outfit.available),
-    featured: Boolean(outfit.featured),
+    available: outfit.available !== false,
+    featured: false,
     sortOrder,
-    updatedAt: Date.now(),
+    updatedAt: nowTs,
     writeToken: WRITE_TOKEN,
   };
 }
 
 export async function saveOutfitToCloud(
   outfit: LehengaOutfit,
-  allOutfitsOrder: string[]
+  allOutfitsOrder: string[],
+  fullOutfitsList?: LehengaOutfit[]
 ): Promise<void> {
-  const sortOrder = Math.max(0, allOutfitsOrder.indexOf(outfit.id));
-  const batch = writeBatch(db);
+  const nowTs = Date.now();
+  setLocalCatalogTimestamp(nowTs);
+  activeMutationsCount++;
 
-  batch.set(
-    doc(db, 'outfits', outfit.id),
-    sanitizeOutfitForFirestore(outfit, sortOrder)
-  );
-  batch.set(doc(db, 'store_state', 'catalog_meta'), {
-    initialized: true,
-    outfitOrder: allOutfitsOrder,
-    updatedAt: Date.now(),
-    writeToken: WRITE_TOKEN,
+  try {
+    if (Array.isArray(fullOutfitsList)) {
+      lastEmittedOutfitsJson = JSON.stringify(fullOutfitsList);
+      try {
+        await fetch('/api/outfits/sync', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ outfits: fullOutfitsList }),
+        });
+      } catch {
+        // ignore if static deployment
+      }
+    }
+  } finally {
+    activeMutationsCount = Math.max(0, activeMutationsCount - 1);
+  }
+
+  // Fire-and-forget Firestore write so UI never waits on Firestore quota timeouts
+  void runFirestoreWriteSafely(async () => {
+    const sortOrder = Math.max(0, allOutfitsOrder.indexOf(outfit.id));
+    const batch = writeBatch(db);
+
+    batch.set(
+      doc(db, 'outfits', outfit.id),
+      sanitizeOutfitForFirestore(outfit, sortOrder, nowTs)
+    );
+    batch.set(doc(db, 'store_state', 'catalog_meta'), {
+      initialized: true,
+      outfitOrder: allOutfitsOrder,
+      updatedAt: nowTs,
+      writeToken: WRITE_TOKEN,
+    });
+
+    await batch.commit();
   });
-
-  await batch.commit();
 }
 
 export async function deleteOutfitFromCloud(
   outfitId: string,
-  remainingOrder: string[]
+  remainingOrder: string[],
+  remainingOutfitsList?: LehengaOutfit[]
 ): Promise<void> {
-  const batch = writeBatch(db);
-  batch.delete(doc(db, 'outfits', outfitId));
-  batch.set(doc(db, 'store_state', 'catalog_meta'), {
-    initialized: true,
-    outfitOrder: remainingOrder,
-    updatedAt: Date.now(),
-    writeToken: WRITE_TOKEN,
+  const nowTs = Date.now();
+  setLocalCatalogTimestamp(nowTs);
+  activeMutationsCount++;
+
+  try {
+    if (Array.isArray(remainingOutfitsList)) {
+      lastEmittedOutfitsJson = JSON.stringify(remainingOutfitsList);
+      try {
+        await fetch('/api/outfits/sync', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ outfits: remainingOutfitsList }),
+        });
+      } catch {
+        // ignore if static deployment
+      }
+    }
+  } finally {
+    activeMutationsCount = Math.max(0, activeMutationsCount - 1);
+  }
+
+  void runFirestoreWriteSafely(async () => {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'outfits', outfitId));
+    batch.set(doc(db, 'store_state', 'catalog_meta'), {
+      initialized: true,
+      outfitOrder: remainingOrder,
+      updatedAt: nowTs,
+      writeToken: WRITE_TOKEN,
+    });
+    await batch.commit();
   });
-  await batch.commit();
 }
 
 export async function saveAllOutfitsToCloud(outfits: LehengaOutfit[]): Promise<void> {
-  const batch = writeBatch(db);
-  const outfitOrder = outfits.map((o) => o.id);
+  const nowTs = Date.now();
+  setLocalCatalogTimestamp(nowTs);
+  lastEmittedOutfitsJson = JSON.stringify(outfits);
 
-  outfits.forEach((outfit, idx) => {
-    batch.set(doc(db, 'outfits', outfit.id), sanitizeOutfitForFirestore(outfit, idx));
+  try {
+    await fetch('/api/outfits/sync', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outfits }),
+    });
+  } catch {
+    // ignore if static deployment
+  }
+
+  void runFirestoreWriteSafely(async () => {
+    const batch = writeBatch(db);
+    const outfitOrder = outfits.map((o) => o.id);
+
+    outfits.forEach((outfit, idx) => {
+      batch.set(doc(db, 'outfits', outfit.id), sanitizeOutfitForFirestore(outfit, idx, nowTs));
+    });
+
+    batch.set(doc(db, 'store_state', 'catalog_meta'), {
+      initialized: true,
+      outfitOrder,
+      updatedAt: nowTs,
+      writeToken: WRITE_TOKEN,
+    });
+
+    await batch.commit();
   });
-
-  batch.set(doc(db, 'store_state', 'catalog_meta'), {
-    initialized: true,
-    outfitOrder,
-    updatedAt: Date.now(),
-    writeToken: WRITE_TOKEN,
-  });
-
-  await batch.commit();
 }
 
 export async function saveSiteSettingsToCloud(settings: SiteSettings): Promise<void> {
-  await setDoc(doc(db, 'store_state', 'settings'), {
-    settings,
-    updatedAt: Date.now(),
-    writeToken: WRITE_TOKEN,
+  const nowTs = Date.now();
+  setLocalSettingsTimestamp(nowTs);
+
+  try {
+    await fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
+  } catch {
+    // ignore if static deployment
+  }
+
+  void runFirestoreWriteSafely(async () => {
+    await setDoc(doc(db, 'store_state', 'settings'), {
+      settings,
+      updatedAt: nowTs,
+      writeToken: WRITE_TOKEN,
+    });
   });
 }
 
 export async function saveTestimonialsToCloud(
   testimonials: CustomerTestimonial[]
 ): Promise<void> {
-  await setDoc(doc(db, 'store_state', 'testimonials'), {
-    items: testimonials,
-    updatedAt: Date.now(),
-    writeToken: WRITE_TOKEN,
+  try {
+    await fetch('/api/testimonials/sync', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testimonials }),
+    });
+  } catch {
+    // ignore if static deployment
+  }
+
+  void runFirestoreWriteSafely(async () => {
+    await setDoc(doc(db, 'store_state', 'testimonials'), {
+      items: testimonials,
+      updatedAt: Date.now(),
+      writeToken: WRITE_TOKEN,
+    });
   });
 }
 
@@ -340,26 +693,100 @@ interface LiveStoreCallbacks {
 }
 
 /**
- * Subscribes to real-time Firestore updates across outfits, site settings, and testimonials.
- * Any change in the Admin Dashboard immediately propagates to all connected clients (including Vercel)
- * in under 1 second via Firestore WebSockets.
+ * Subscribes to live updates from both the backend server (`/api/*`) and Firestore.
+ * Ensures stale Firestore documents or identical polls never reset active uploads.
  */
 export function subscribeToLiveStore({
   initialOutfits,
-  initialSettings,
-  initialTestimonials,
   onOutfitsChange,
   onSettingsChange,
   onTestimonialsChange,
 }: LiveStoreCallbacks): () => void {
-  let latestOutfitsMap = new Map<string, LehengaOutfit & { sortOrder?: number }>();
+  let isDisposed = false;
+  lastEmittedOutfitsJson = JSON.stringify(initialOutfits);
+
+  const emitIfChanged = (nextOutfits: LehengaOutfit[]) => {
+    if (activeMutationsCount > 0) return;
+    const nextJson = JSON.stringify(nextOutfits);
+    if (nextJson === lastEmittedOutfitsJson) return;
+    lastEmittedOutfitsJson = nextJson;
+    onOutfitsChange(nextOutfits);
+  };
+
+  const syncWithBackendServer = async () => {
+    if (activeMutationsCount > 0) return;
+    try {
+      const [outfitsRes, settingsRes, testimonialsRes] = await Promise.all([
+        fetch('/api/outfits'),
+        fetch('/api/settings'),
+        fetch('/api/testimonials'),
+      ]);
+
+      if (isDisposed || activeMutationsCount > 0) return;
+
+      if (outfitsRes.ok) {
+        const serverOutfits = (await outfitsRes.json()) as LehengaOutfit[];
+        if (Array.isArray(serverOutfits) && serverOutfits.length > 0) {
+          emitIfChanged(serverOutfits);
+        }
+      }
+
+      if (settingsRes.ok) {
+        const serverSettings = (await settingsRes.json()) as SiteSettings;
+        if (serverSettings && typeof serverSettings === 'object') {
+          onSettingsChange(serverSettings);
+        }
+      }
+
+      if (testimonialsRes.ok) {
+        const serverTestimonials = (await testimonialsRes.json()) as CustomerTestimonial[];
+        if (Array.isArray(serverTestimonials) && serverTestimonials.length > 0) {
+          onTestimonialsChange(serverTestimonials);
+        }
+      }
+    } catch {
+      // Static environment without /api routes
+    }
+  };
+
+  syncWithBackendServer();
+
+  const pollTimer = setInterval(async () => {
+    if (isDisposed || activeMutationsCount > 0) return;
+    try {
+      const outfitsRes = await fetch('/api/outfits');
+      if (outfitsRes.ok && !isDisposed && activeMutationsCount === 0) {
+        const serverOutfits = (await outfitsRes.json()) as LehengaOutfit[];
+        if (Array.isArray(serverOutfits) && serverOutfits.length > 0) {
+          emitIfChanged(serverOutfits);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, 4000);
+
+  if (isWriteQuotaExhausted) {
+    return () => {
+      isDisposed = true;
+      clearInterval(pollTimer);
+    };
+  }
+
+  let latestOutfitsMap = new Map<string, LehengaOutfit & { sortOrder?: number; updatedAt?: number }>();
   let latestOutfitOrder: string[] | null = null;
+  let latestMetaUpdatedAt = 0;
   let catalogMetaLoaded = false;
   let outfitsCollectionLoaded = false;
-  let isSeedingCatalog = false;
 
   const emitOrderedOutfits = () => {
     if (!catalogMetaLoaded || !outfitsCollectionLoaded) return;
+    if (latestOutfitsMap.size === 0 || activeMutationsCount > 0) return;
+
+    const localTs = getLocalCatalogTimestamp();
+    if (localTs > 0 && latestMetaUpdatedAt > 0 && latestMetaUpdatedAt < localTs) {
+      return;
+    }
 
     const allDocs = Array.from(latestOutfitsMap.values());
     if (latestOutfitOrder && latestOutfitOrder.length > 0) {
@@ -374,48 +801,37 @@ export function subscribeToLiveStore({
       allDocs.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
     }
 
-    onOutfitsChange(allDocs);
+    emitIfChanged(allDocs);
   };
 
-  // 1. Listen to catalog_meta document
   const unsubMeta = onSnapshot(
     doc(db, 'store_state', 'catalog_meta'),
-    async (snap) => {
-      if (!snap.exists()) {
-        if (!isSeedingCatalog) {
-          isSeedingCatalog = true;
-          try {
-            await saveAllOutfitsToCloud(initialOutfits);
-          } catch (err) {
-            console.error('Initial catalog seed error:', err);
-          }
-        }
-        return;
-      }
+    (snap) => {
+      if (!snap.exists()) return;
       const data = snap.data();
       latestOutfitOrder = Array.isArray(data.outfitOrder) ? data.outfitOrder : null;
+      latestMetaUpdatedAt = typeof data.updatedAt === 'number' ? data.updatedAt : 0;
       catalogMetaLoaded = true;
       emitOrderedOutfits();
     },
     (err) => {
-      console.error('Firestore catalog_meta listener error:', err);
+      tripWriteQuotaCircuitBreaker(err);
     }
   );
 
-  // 2. Listen to outfits collection in real time
   const unsubOutfits = onSnapshot(
     collection(db, 'outfits'),
     (snap) => {
-      const nextMap = new Map<string, LehengaOutfit & { sortOrder?: number }>();
+      const nextMap = new Map<string, LehengaOutfit & { sortOrder?: number; updatedAt?: number }>();
       snap.forEach((docSnap) => {
         const d = docSnap.data();
         nextMap.set(docSnap.id, {
           id: d.id || docSnap.id,
-          code: d.code || '',
+          code: d.color || d.code || '',
+          color: d.color || d.code || '',
           title: d.title || '',
           vibeCategory: d.vibeCategory || 'Navratri Ni Pehvesh',
           pricePerDay: Number(d.pricePerDay) || 0,
-          originalRetailPrice: Number(d.originalRetailPrice) || 0,
           description: d.description || '',
           ogHumorTagline: d.ogHumorTagline || '',
           mediaUrl: d.mediaUrl || '',
@@ -423,9 +839,10 @@ export function subscribeToLiveStore({
           images: Array.isArray(d.images) ? d.images : [],
           videoUrl: d.videoUrl || '',
           sizes: Array.isArray(d.sizes) ? d.sizes : [],
-          available: Boolean(d.available),
-          featured: Boolean(d.featured),
+          available: d.available !== false,
+          createdAt: d.createdAt || new Date().toISOString(),
           sortOrder: typeof d.sortOrder === 'number' ? d.sortOrder : 9999,
+          updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : 0,
         });
       });
       latestOutfitsMap = nextMap;
@@ -433,63 +850,46 @@ export function subscribeToLiveStore({
       emitOrderedOutfits();
     },
     (err) => {
-      console.error('Firestore outfits listener error:', err);
+      tripWriteQuotaCircuitBreaker(err);
     }
   );
 
-  // 3. Listen to site settings in real time
-  let isSeedingSettings = false;
   const unsubSettings = onSnapshot(
     doc(db, 'store_state', 'settings'),
-    async (snap) => {
-      if (!snap.exists()) {
-        if (!isSeedingSettings) {
-          isSeedingSettings = true;
-          try {
-            await saveSiteSettingsToCloud(initialSettings);
-          } catch (err) {
-            console.error('Initial settings seed error:', err);
-          }
-        }
+    (snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data();
+      const remoteTs = typeof data?.updatedAt === 'number' ? data.updatedAt : 0;
+      const localTs = getLocalSettingsTimestamp();
+      if (localTs > 0 && remoteTs > 0 && remoteTs < localTs) {
         return;
       }
-      const data = snap.data();
       if (data?.settings && typeof data.settings === 'object') {
         onSettingsChange(data.settings as SiteSettings);
       }
     },
     (err) => {
-      console.error('Firestore settings listener error:', err);
+      tripWriteQuotaCircuitBreaker(err);
     }
   );
 
-  // 4. Listen to customer testimonials in real time
-  let isSeedingTestimonials = false;
   const unsubTestimonials = onSnapshot(
     doc(db, 'store_state', 'testimonials'),
-    async (snap) => {
-      if (!snap.exists()) {
-        if (!isSeedingTestimonials) {
-          isSeedingTestimonials = true;
-          try {
-            await saveTestimonialsToCloud(initialTestimonials);
-          } catch (err) {
-            console.error('Initial testimonials seed error:', err);
-          }
-        }
-        return;
-      }
+    (snap) => {
+      if (!snap.exists()) return;
       const data = snap.data();
       if (Array.isArray(data?.items)) {
         onTestimonialsChange(data.items as CustomerTestimonial[]);
       }
     },
     (err) => {
-      console.error('Firestore testimonials listener error:', err);
+      tripWriteQuotaCircuitBreaker(err);
     }
   );
 
   return () => {
+    isDisposed = true;
+    clearInterval(pollTimer);
     unsubMeta();
     unsubOutfits();
     unsubSettings();

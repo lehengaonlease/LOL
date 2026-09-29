@@ -1,4 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import gsap from 'gsap';
+import { ScrollTrigger } from 'gsap/ScrollTrigger';
+
+gsap.registerPlugin(ScrollTrigger);
 import {
   Sparkles,
   Heart,
@@ -11,6 +15,10 @@ import {
   Lock,
   HelpCircle,
   Instagram,
+  SlidersHorizontal,
+  Palette,
+  CheckCircle2,
+  X,
 } from 'lucide-react';
 import { INITIAL_OUTFITS } from './data/initialOutfits';
 import { INITIAL_TESTIMONIALS } from './data/initialTestimonials';
@@ -24,6 +32,9 @@ import {
   CustomerTestimonial,
   normalizeStudioWhatsAppDisplay,
   formatWhatsAppUrlNumber,
+  LEHENGA_COLOR_OPTIONS,
+  resolveOutfitColor,
+  getOutfitColorSwatch,
 } from './types';
 import { Navbar } from './components/Navbar';
 import { HeroSection } from './components/HeroSection';
@@ -173,8 +184,13 @@ export function App() {
   const [activeView, setActiveViewState] = useState<'catalog' | 'admin'>(detectInitialView);
   const [selectedVibe, setSelectedVibe] = useState<VibeCategory>('All Vibes');
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'featured' | 'price-asc' | 'price-desc'>('featured');
+  const [sortBy, setSortBy] = useState<
+    'featured' | 'price-asc' | 'price-desc' | 'under-2000' | '2000-3500' | 'above-3500'
+  >('featured');
+  const [selectedColor, setSelectedColor] = useState<string>('All Colours');
+  const [availabilityFilter, setAvailabilityFilter] = useState<'all' | 'available' | 'booked'>('all');
   const [showWishlistOnly, setShowWishlistOnly] = useState(false);
+  const catalogGridRef = useRef<HTMLDivElement | null>(null);
 
   const broadcastCatalogUpdate = (updatedOutfits: LehengaOutfit[]) => {
     try {
@@ -346,6 +362,29 @@ export function App() {
     }
   };
 
+  const handleReplyTestimonial = async (id: string, replyText: string) => {
+    const updated = testimonials.map((item) =>
+      item.id === id
+        ? {
+            ...item,
+            adminReply: replyText || undefined,
+            adminRepliedAt: replyText ? new Date().toISOString() : undefined,
+          }
+        : item
+    );
+    setTestimonials(updated);
+    try {
+      localStorage.setItem(STORAGE_KEY_TESTIMONIALS, JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+    try {
+      await saveTestimonialsToCloud(updated);
+    } catch (err) {
+      console.error('Failed to sync testimonial reply to cloud:', err);
+    }
+  };
+
   const handleAddTestimonial = async (newTestimonial: CustomerTestimonial) => {
     const updated = [newTestimonial, ...testimonials];
     setTestimonials(updated);
@@ -448,22 +487,78 @@ export function App() {
         if (selectedVibe !== 'All Vibes' && item.vibeCategory !== selectedVibe) {
           return false;
         }
+        const itemColor = resolveOutfitColor(item.color || item.code);
+        if (
+          selectedColor !== 'All Colours' &&
+          itemColor.toLowerCase() !== selectedColor.toLowerCase()
+        ) {
+          return false;
+        }
+        const isAvail = item.available !== false;
+        if (availabilityFilter === 'available' && !isAvail) return false;
+        if (availabilityFilter === 'booked' && isAvail) return false;
+
+        if (sortBy === 'under-2000' && item.pricePerDay >= 2000) return false;
+        if (sortBy === '2000-3500' && (item.pricePerDay < 2000 || item.pricePerDay > 3500)) {
+          return false;
+        }
+        if (sortBy === 'above-3500' && item.pricePerDay <= 3500) return false;
+
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
           const matchTitle = item.title.toLowerCase().includes(q);
-          const matchCode = item.code.toLowerCase().includes(q);
+          const matchColor = itemColor.toLowerCase().includes(q);
           const matchDesc = item.description.toLowerCase().includes(q);
           const matchVibe = item.vibeCategory.toLowerCase().includes(q);
-          return matchTitle || matchCode || matchDesc || matchVibe;
+          return matchTitle || matchColor || matchDesc || matchVibe;
         }
         return true;
       })
       .sort((a, b) => {
-        if (sortBy === 'price-asc') return a.pricePerDay - b.pricePerDay;
-        if (sortBy === 'price-desc') return b.pricePerDay - a.pricePerDay;
+        if (sortBy === 'price-asc' || sortBy === 'under-2000' || sortBy === '2000-3500') {
+          return a.pricePerDay - b.pricePerDay;
+        }
+        if (sortBy === 'price-desc' || sortBy === 'above-3500') {
+          return b.pricePerDay - a.pricePerDay;
+        }
         return 0;
       });
-  }, [outfits, selectedVibe, searchQuery, sortBy, showWishlistOnly, wishlist]);
+  }, [
+    outfits,
+    selectedVibe,
+    selectedColor,
+    availabilityFilter,
+    searchQuery,
+    sortBy,
+    showWishlistOnly,
+    wishlist,
+  ]);
+
+  useEffect(() => {
+    if (activeView !== 'catalog' || inspectOutfit || !catalogGridRef.current) return;
+
+    const items = catalogGridRef.current.querySelectorAll('.image');
+    if (!items.length) return;
+
+    gsap.set(items, { autoAlpha: 0 });
+
+    const batchTriggers = ScrollTrigger.batch(items, {
+      onEnter: (batch) =>
+        gsap.to(batch, {
+          autoAlpha: 1,
+          stagger: 0.2,
+          duration: 1,
+          ease: 'sine.out',
+          overwrite: true,
+        }),
+    });
+
+    ScrollTrigger.refresh();
+
+    return () => {
+      batchTriggers.forEach((trigger) => trigger.kill());
+    };
+  }, [filteredOutfits, activeView, inspectOutfit]);
 
   // Connect Google Tasks
   const handleConnectGoogleTasks = async () => {
@@ -611,7 +706,10 @@ export function App() {
           <AdminDashboard
             outfits={outfits}
             siteSettings={siteSettings}
+            testimonials={testimonials}
             onUpdateSiteSettings={handleUpdateSiteSettings}
+            onReplyTestimonial={handleReplyTestimonial}
+            onDeleteTestimonial={handleDeleteTestimonial}
             onAddOutfit={async (newOutfit) => {
               setSelectedVibe('All Vibes');
               setSearchQuery('');
@@ -622,7 +720,8 @@ export function App() {
               try {
                 await saveOutfitToCloud(
                   newOutfit,
-                  nextOutfits.map((o) => o.id)
+                  nextOutfits.map((o) => o.id),
+                  nextOutfits
                 );
               } catch (err) {
                 console.error('Failed to sync new outfit to cloud:', err);
@@ -637,7 +736,8 @@ export function App() {
               try {
                 await saveOutfitToCloud(
                   updatedOutfit,
-                  nextOutfits.map((o) => o.id)
+                  nextOutfits.map((o) => o.id),
+                  nextOutfits
                 );
               } catch (err) {
                 console.error('Failed to sync updated outfit to cloud:', err);
@@ -650,7 +750,8 @@ export function App() {
               try {
                 await deleteOutfitFromCloud(
                   id,
-                  nextOutfits.map((o) => o.id)
+                  nextOutfits.map((o) => o.id),
+                  nextOutfits
                 );
               } catch (err) {
                 console.error('Failed to sync deleted outfit to cloud:', err);
@@ -665,6 +766,7 @@ export function App() {
           <LookbookModal
             outfit={inspectOutfit}
             allOutfits={outfits}
+            siteSettings={siteSettings}
             wishlist={wishlist}
             onClose={handleCloseOutfitPage}
             onSelectOutfit={handleOpenOutfitPage}
@@ -743,26 +845,107 @@ export function App() {
                 )}
               </div>
 
-              {/* Right Sort Control */}
-              <div className="flex items-center justify-between md:justify-end gap-3 shrink-0">
-                <span className="text-xs text-[#4A1525]/65">
-                  Showing <strong className="text-[#4A1525]">{filteredOutfits.length}</strong> designs
-                </span>
-
+              {/* Right Filter Controls: Budget (Low to High / High to Low / Ranges), Colours & Available/Booked */}
+              <div className="flex flex-wrap items-center justify-start md:justify-end gap-2.5 shrink-0">
+                {/* 1. Budget & Price Sort Filter */}
                 <div className="relative inline-flex items-center">
                   <ArrowUpDown className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 pointer-events-none" />
                   <select
                     value={sortBy}
                     onChange={(e) =>
-                      setSortBy(e.target.value as 'featured' | 'price-asc' | 'price-desc')
+                      setSortBy(
+                        e.target.value as
+                          | 'featured'
+                          | 'price-asc'
+                          | 'price-desc'
+                          | 'under-2000'
+                          | '2000-3500'
+                          | 'above-3500'
+                      )
                     }
-                    className="pl-8 pr-4 py-2 rounded-full bg-white border border-[#F8BBD0] text-xs font-medium text-[#4A1525] focus:outline-none focus:border-[#D81B60] cursor-pointer"
+                    aria-label="Filter by Budget"
+                    className={`pl-8 pr-4 py-2 rounded-full border text-xs font-medium focus:outline-none cursor-pointer transition-colors ${
+                      sortBy !== 'featured'
+                        ? 'bg-[#FFF0F5] border-[#D81B60] text-[#D81B60] font-semibold'
+                        : 'bg-white border-[#F8BBD0] text-[#4A1525] focus:border-[#D81B60]'
+                    }`}
                   >
-                    <option value="featured">Sort: Featured</option>
-                    <option value="price-asc">Rent: Low to High</option>
-                    <option value="price-desc">Rent: High to Low</option>
+                    <option value="featured">Budget: All / Featured</option>
+                    <option value="price-asc">Budget: Low to High</option>
+                    <option value="price-desc">Budget: High to Low</option>
+                    <option value="under-2000">Under ₹2,000 / day</option>
+                    <option value="2000-3500">₹2,000 – ₹3,500 / day</option>
+                    <option value="above-3500">Above ₹3,500 / day</option>
                   </select>
                 </div>
+
+                {/* 2. Colour Filter */}
+                <div className="relative inline-flex items-center">
+                  {selectedColor === 'All Colours' ? (
+                    <Palette className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 pointer-events-none" />
+                  ) : (
+                    <span
+                      className="w-3 h-3 rounded-full border border-black/15 absolute left-3 pointer-events-none"
+                      style={{ background: getOutfitColorSwatch(selectedColor) }}
+                    />
+                  )}
+                  <select
+                    value={selectedColor}
+                    onChange={(e) => setSelectedColor(e.target.value)}
+                    aria-label="Filter by Colour"
+                    className={`pl-8 pr-4 py-2 rounded-full border text-xs font-medium focus:outline-none cursor-pointer transition-colors ${
+                      selectedColor !== 'All Colours'
+                        ? 'bg-[#FFF0F5] border-[#D81B60] text-[#D81B60] font-semibold'
+                        : 'bg-white border-[#F8BBD0] text-[#4A1525] focus:border-[#D81B60]'
+                    }`}
+                  >
+                    <option value="All Colours">Colour: All Colours</option>
+                    {LEHENGA_COLOR_OPTIONS.map((opt) => (
+                      <option key={opt.label} value={opt.label}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 3. Availability Filter (Available / Booked) */}
+                <div className="relative inline-flex items-center">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 pointer-events-none" />
+                  <select
+                    value={availabilityFilter}
+                    onChange={(e) =>
+                      setAvailabilityFilter(e.target.value as 'all' | 'available' | 'booked')
+                    }
+                    aria-label="Filter by Availability"
+                    className={`pl-8 pr-4 py-2 rounded-full border text-xs font-medium focus:outline-none cursor-pointer transition-colors ${
+                      availabilityFilter !== 'all'
+                        ? 'bg-[#FFF0F5] border-[#D81B60] text-[#D81B60] font-semibold'
+                        : 'bg-white border-[#F8BBD0] text-[#4A1525] focus:border-[#D81B60]'
+                    }`}
+                  >
+                    <option value="all">Status: All (Available & Booked)</option>
+                    <option value="available">Status: Available Only</option>
+                    <option value="booked">Status: Booked</option>
+                  </select>
+                </div>
+
+                {/* Clear Active Filters Button */}
+                {(sortBy !== 'featured' ||
+                  selectedColor !== 'All Colours' ||
+                  availabilityFilter !== 'all') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSortBy('featured');
+                      setSelectedColor('All Colours');
+                      setAvailabilityFilter('all');
+                    }}
+                    className="inline-flex items-center gap-1 px-3 py-2 rounded-full bg-[#4A1525] text-white text-xs font-semibold hover:bg-[#D81B60] transition-colors cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                    <span>Reset</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -774,11 +957,14 @@ export function App() {
                   No matching lehengas found
                 </h3>
                 <p className="text-xs text-[#4A1525]/60 mt-1 mb-5">
-                  Try clearing your search filter or exploring all occasion edits.
+                  Try clearing your budget, colour, or availability filters to explore all designs.
                 </p>
                 <button
                   onClick={() => {
                     setSelectedVibe('All Vibes');
+                    setSelectedColor('All Colours');
+                    setAvailabilityFilter('all');
+                    setSortBy('featured');
                     setSearchQuery('');
                     setShowWishlistOnly(false);
                   }}
@@ -788,7 +974,10 @@ export function App() {
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-7 lg:gap-8">
+              <div
+                ref={catalogGridRef}
+                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-7 lg:gap-8"
+              >
                 {filteredOutfits.map((outfit) => (
                   <ProductCard
                     key={outfit.id}
@@ -875,7 +1064,6 @@ export function App() {
           <TestimonialSection
             testimonials={testimonials}
             onAddTestimonial={handleAddTestimonial}
-            onDeleteTestimonial={handleDeleteTestimonial}
           />
         </main>
       )}

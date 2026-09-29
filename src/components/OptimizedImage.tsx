@@ -3,7 +3,6 @@ import {
   BUNDLED_LOGO_DATA_URL,
   BUNDLED_LEHENGA_IMG_1_DATA_URL,
   BUNDLED_LEHENGA_IMG_2_DATA_URL,
-  BUNDLED_HERO_POSTER_DATA_URL,
 } from '../data/bundledAssets';
 import { resolveCloudMediaUrl } from '../services/firebaseSyncService';
 
@@ -17,8 +16,8 @@ export interface OptimizedImageProps extends React.ImgHTMLAttributes<HTMLImageEl
 
 /**
  * Global path resolver for images and logos in Vite + Vercel production builds.
- * Maps runtime `/uploads/` paths and relative `public/` paths to bundled production
- * assets or clean root-relative URLs so images never 404 on Vercel.
+ * Only maps the exact initial seed filenames to bundled data URLs so newly uploaded
+ * images are never overwritten by the default yellow lehenga image.
  */
 export function resolveOptimizedImagePath(rawSrc?: string, isLogo = false): string {
   if (!rawSrc || !rawSrc.trim()) {
@@ -27,29 +26,32 @@ export function resolveOptimizedImagePath(rawSrc?: string, isLogo = false): stri
 
   const trimmed = rawSrc.trim();
 
-  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:') || trimmed.startsWith('cloud-media://')) {
+  if (
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:') ||
+    trimmed.startsWith('cloud-media://')
+  ) {
     return trimmed;
   }
 
-  // Resolve known brand logos
+  // Only match the exact initial default logo files, NOT new uploads
   if (
-    isLogo ||
-    trimmed.includes('logo-top') ||
-    trimmed.includes('logo-bottom')
+    trimmed.includes('logo-top-1790531566115-6ys4f') ||
+    trimmed.includes('logo-bottom-1790531569272-mgmg7')
   ) {
     return BUNDLED_LOGO_DATA_URL;
   }
 
-  // Resolve known studio product photos & hero poster
-  if (trimmed.includes('lehenga-img-1')) {
+  // Only match the exact initial default product photos, NOT new uploads
+  if (trimmed.includes('lehenga-img-1-1790531510903-9ca8r')) {
     return BUNDLED_LEHENGA_IMG_1_DATA_URL;
   }
 
-  if (trimmed.includes('lehenga-img-2')) {
+  if (trimmed.includes('lehenga-img-2-1790531542661-de25a')) {
     return BUNDLED_LEHENGA_IMG_2_DATA_URL;
   }
 
-  if (trimmed.includes('hero-poster')) {
+  if (trimmed === '/uploads/hero-poster.jpg' || trimmed === 'uploads/hero-poster.jpg') {
     return '/hero-poster.jpg';
   }
 
@@ -80,9 +82,7 @@ export const OptimizedImage: React.FC<OptimizedImageProps> = ({
   const resolvedPrimary = resolveOptimizedImagePath(src, isLogo);
   const [currentSrc, setCurrentSrc] = useState<string>(
     resolvedPrimary.startsWith('cloud-media://')
-      ? isLogo
-        ? BUNDLED_LOGO_DATA_URL
-        : BUNDLED_LEHENGA_IMG_1_DATA_URL
+      ? 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
       : resolvedPrimary
   );
   const [hasTriedFallback, setHasTriedFallback] = useState(false);
@@ -93,8 +93,11 @@ export const OptimizedImage: React.FC<OptimizedImageProps> = ({
     setHasTriedFallback(false);
     if (nextResolved.startsWith('cloud-media://')) {
       resolveCloudMediaUrl(nextResolved).then((blobUrl) => {
-        if (active && blobUrl) {
+        if (!active) return;
+        if (blobUrl && !blobUrl.startsWith('cloud-media://')) {
           setCurrentSrc(blobUrl);
+        } else {
+          setCurrentSrc(isLogo ? BUNDLED_LOGO_DATA_URL : BUNDLED_LEHENGA_IMG_1_DATA_URL);
         }
       });
     } else {
@@ -114,7 +117,9 @@ export const OptimizedImage: React.FC<OptimizedImageProps> = ({
       return;
     }
 
-    setCurrentSrc(isLogo ? BUNDLED_LOGO_DATA_URL : BUNDLED_LEHENGA_IMG_1_DATA_URL);
+    if (isLogo) {
+      setCurrentSrc(BUNDLED_LOGO_DATA_URL);
+    }
   };
 
   return (

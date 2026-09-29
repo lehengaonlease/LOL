@@ -3,7 +3,6 @@ import {
   BUNDLED_LOGO_DATA_URL,
   BUNDLED_LEHENGA_IMG_1_DATA_URL,
   BUNDLED_LEHENGA_IMG_2_DATA_URL,
-  BUNDLED_HERO_POSTER_DATA_URL,
   BUNDLED_VIDEO_MP4_BASE64,
 } from '../data/bundledAssets';
 import { resolveCloudMediaUrl } from '../services/firebaseSyncService';
@@ -35,44 +34,38 @@ export function getBundledVideoBlobUrl(): string {
 }
 
 /**
- * Resolves any image, logo, poster, or video path so that even on static
- * Vercel deployments where runtime `/uploads/` files are not pushed to Git,
- * all brand logos, product images, posters, and videos load with 100% reliability.
+ * Resolves video and poster paths without overwriting newly uploaded videos or photos.
  */
 export function resolvePublicVideoPath(rawSrc: string): string {
   if (!rawSrc) return getBundledVideoBlobUrl();
   const trimmed = rawSrc.trim();
 
-  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:') || trimmed.startsWith('cloud-media://')) {
+  if (
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:') ||
+    trimmed.startsWith('cloud-media://')
+  ) {
     return trimmed;
   }
 
-  // Map known studio logos, product photos, hero poster, and videos to bundled production assets
+  // Only match the exact initial seed logo/image filenames, never new uploads
   if (
-    trimmed.includes('logo-top') ||
-    trimmed.includes('logo-bottom')
+    trimmed.includes('logo-top-1790531566115-6ys4f') ||
+    trimmed.includes('logo-bottom-1790531569272-mgmg7')
   ) {
     return BUNDLED_LOGO_DATA_URL;
   }
 
-  if (trimmed.includes('lehenga-img-1')) {
+  if (trimmed.includes('lehenga-img-1-1790531510903-9ca8r')) {
     return BUNDLED_LEHENGA_IMG_1_DATA_URL;
   }
 
-  if (trimmed.includes('lehenga-img-2')) {
+  if (trimmed.includes('lehenga-img-2-1790531542661-de25a')) {
     return BUNDLED_LEHENGA_IMG_2_DATA_URL;
   }
 
-  if (trimmed.includes('hero-poster')) {
+  if (trimmed === '/uploads/hero-poster.jpg' || trimmed === 'uploads/hero-poster.jpg') {
     return '/hero-poster.jpg';
-  }
-
-  if (
-    trimmed.includes('hero-banner.mp4') ||
-    trimmed.includes('lehenga-reel.mp4') ||
-    trimmed.includes('lehenga-video-')
-  ) {
-    return '/hero-banner.mp4';
   }
 
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
@@ -83,6 +76,10 @@ export function resolvePublicVideoPath(rawSrc: string): string {
     .replace(/^(\.\/)+/, '')
     .replace(/^public\//i, '')
     .replace(/^\/+/, '');
+
+  if (cleaned.startsWith('uploads/') && /\.mp4$/i.test(cleaned)) {
+    return `/${cleaned}?v=h264`;
+  }
 
   return `/${cleaned}`;
 }
@@ -95,7 +92,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [currentSrc, setCurrentSrc] = useState<string>(() => {
     const initial = resolvePublicVideoPath(src);
-    return initial.startsWith('cloud-media://') ? getBundledVideoBlobUrl() : initial;
+    return initial.startsWith('cloud-media://') ? '' : initial;
   });
   const resolvedPoster = poster ? resolvePublicVideoPath(poster) : undefined;
 
@@ -104,8 +101,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const resolved = resolvePublicVideoPath(src);
     if (resolved.startsWith('cloud-media://')) {
       resolveCloudMediaUrl(resolved).then((blobUrl) => {
-        if (active && blobUrl) {
+        if (!active) return;
+        if (blobUrl && !blobUrl.startsWith('cloud-media://')) {
           setCurrentSrc(blobUrl);
+        } else {
+          setCurrentSrc(getBundledVideoBlobUrl());
         }
       });
     } else {
@@ -118,9 +118,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || !currentSrc) return;
 
-    // Mandatory attributes for mobile Safari & Chrome autoplay execution
     video.defaultMuted = true;
     video.muted = true;
     video.loop = true;
@@ -180,12 +179,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [currentSrc]);
 
-  const handleVideoError = () => {
-    const fallbackBlob = getBundledVideoBlobUrl();
-    if (currentSrc !== fallbackBlob) {
-      setCurrentSrc(fallbackBlob);
-    }
-  };
+  if (!currentSrc) {
+    return <div className={className} />;
+  }
 
   return (
     <video
@@ -198,15 +194,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       loop
       playsInline
       preload="auto"
-      onLoadedData={(e) => {
-        e.currentTarget.muted = true;
-        e.currentTarget.play().catch(() => {});
+      onLoadedMetadata={(e) => {
+        const v = e.currentTarget;
+        v.muted = true;
+        v.play().catch(() => {});
       }}
       onCanPlay={(e) => {
-        e.currentTarget.muted = true;
-        e.currentTarget.play().catch(() => {});
+        const v = e.currentTarget;
+        if (v.paused) {
+          v.muted = true;
+          v.play().catch(() => {});
+        }
       }}
-      onError={handleVideoError}
       className={className}
     />
   );

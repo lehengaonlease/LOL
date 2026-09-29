@@ -23,8 +23,22 @@ import {
   ZoomOut,
   ChevronRight,
   Search,
+  Star,
+  MessageCircleHeart,
+  Send,
+  Tag,
 } from 'lucide-react';
-import { LehengaOutfit, SiteSettings, DEFAULT_SITE_SETTINGS } from '../types';
+import {
+  LehengaOutfit,
+  SiteSettings,
+  DEFAULT_SITE_SETTINGS,
+  CustomerTestimonial,
+  CouponCodeItem,
+  LEHENGA_COLOR_OPTIONS,
+  resolveOutfitColor,
+  getOutfitColorSwatch,
+  getNormalizedCoupons,
+} from '../types';
 import { LolBrandLogo } from './LolBrandLogo';
 import { VideoPlayer } from './VideoPlayer';
 import { OptimizedImage } from './OptimizedImage';
@@ -33,10 +47,13 @@ import { uploadMediaToCloud } from '../services/firebaseSyncService';
 interface AdminDashboardProps {
   outfits: LehengaOutfit[];
   siteSettings: SiteSettings;
+  testimonials?: CustomerTestimonial[];
   onUpdateSiteSettings: (settings: SiteSettings) => Promise<void> | void;
   onAddOutfit: (outfit: LehengaOutfit) => Promise<void> | void;
   onUpdateOutfit: (outfit: LehengaOutfit) => Promise<void> | void;
   onDeleteOutfit: (id: string) => Promise<void> | void;
+  onReplyTestimonial?: (id: string, replyText: string) => Promise<void> | void;
+  onDeleteTestimonial?: (id: string) => Promise<void> | void;
   onResetCatalog: () => void;
   onBackToCatalog: () => void;
 }
@@ -69,7 +86,7 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
   ];
   const batchPhotosInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [code, setCode] = useState(outfit.code);
+  const [code, setCode] = useState(() => resolveOutfitColor(outfit.color || outfit.code));
   const [title, setTitle] = useState(outfit.title);
   const [vibeCategory, setVibeCategory] = useState(outfit.vibeCategory);
   const [description, setDescription] = useState(outfit.description);
@@ -93,24 +110,43 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
   const [uploadingSlot, setUploadingSlot] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Sync local state when outfit prop updates from parent
+  const latestSlotsRef = useRef<[string, string, string, string]>(imageSlots);
+  const latestVideoRef = useRef<string>(videoUrl);
   useEffect(() => {
-    setCode(outfit.code);
+    latestSlotsRef.current = imageSlots;
+  }, [imageSlots]);
+  useEffect(() => {
+    latestVideoRef.current = videoUrl;
+  }, [videoUrl]);
+
+  // Sync local state when outfit prop updates from parent (only when not actively uploading/saving)
+  useEffect(() => {
+    if (uploadingSlot !== null || isSaving) return;
+    setCode(resolveOutfitColor(outfit.color || outfit.code));
     setTitle(outfit.title);
     setVibeCategory(outfit.vibeCategory);
     setDescription(outfit.description);
     setPricePerDay(String(outfit.pricePerDay));
     setSizesText(outfit.sizes.join(', '));
     setAvailable(outfit.available);
-    setVideoUrl(outfit.videoUrl || (outfit.mediaType === 'video' ? outfit.mediaUrl : ''));
+    const nextVid = outfit.videoUrl || (outfit.mediaType === 'video' ? outfit.mediaUrl : '');
+    setVideoUrl(nextVid);
+    latestVideoRef.current = nextVid;
     const imgs =
       Array.isArray(outfit.images) && outfit.images.length > 0
         ? outfit.images
         : outfit.mediaType === 'image' && outfit.mediaUrl
         ? [outfit.mediaUrl]
         : [];
-    setImageSlots([imgs[0] || '', imgs[1] || '', imgs[2] || '', imgs[3] || '']);
-  }, [outfit]);
+    const nextSlots: [string, string, string, string] = [
+      imgs[0] || '',
+      imgs[1] || '',
+      imgs[2] || '',
+      imgs[3] || '',
+    ];
+    setImageSlots(nextSlots);
+    latestSlotsRef.current = nextSlots;
+  }, [outfit, uploadingSlot, isSaving]);
 
   // Build front-end identical media items (Video is index 0 when present; otherwise Photo 1 is index 0)
   const mediaItems = useMemo(() => {
@@ -168,11 +204,13 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
   const buildUpdatedOutfit = (
     overrideSlots?: [string, string, string, string],
     overrideVideo?: string,
-    overrideAvailable?: boolean
+    overrideAvailable?: boolean,
+    overrideColor?: string
   ): LehengaOutfit => {
     const slots = overrideSlots ?? imageSlots;
     const vid = (overrideVideo !== undefined ? overrideVideo : videoUrl).trim();
     const avail = overrideAvailable ?? available;
+    const selectedColor = resolveOutfitColor(overrideColor !== undefined ? overrideColor : code);
 
     const validImages = slots.map((s) => s.trim()).filter(Boolean).slice(0, 4);
     const fallbackImage =
@@ -196,7 +234,8 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
 
     return {
       ...outfit,
-      code: code.trim().toUpperCase() || outfit.code,
+      code: selectedColor,
+      color: selectedColor,
       title: title.trim() || outfit.title,
       vibeCategory: vibeCategory.trim() || 'Navratri Ni Pehvesh',
       description: description.trim(),
@@ -224,9 +263,10 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
       currentImgs[3] || '',
     ];
     const savedVid = outfit.videoUrl || (outfit.mediaType === 'video' ? outfit.mediaUrl : '');
+    const savedColor = resolveOutfitColor(outfit.color || outfit.code);
 
     return (
-      code.trim().toUpperCase() !== outfit.code ||
+      resolveOutfitColor(code) !== savedColor ||
       title.trim() !== outfit.title ||
       vibeCategory.trim() !== outfit.vibeCategory ||
       description.trim() !== outfit.description ||
@@ -253,14 +293,15 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
     customSlots?: [string, string, string, string],
     customVid?: string,
     customAvail?: boolean,
-    toastMsg?: string
+     toastMsg?: string,
+    customColor?: string
   ) => {
     setIsSaving(true);
     try {
-      const nextOutfit = buildUpdatedOutfit(customSlots, customVid, customAvail);
+      const nextOutfit = buildUpdatedOutfit(customSlots, customVid, customAvail, customColor);
       await onSaveOutfit(
         nextOutfit,
-        toastMsg || `Synced "${nextOutfit.title}" (${nextOutfit.code}) to live storefront!`
+        toastMsg || `Synced "${nextOutfit.title}" (${nextOutfit.color || nextOutfit.code}) to live storefront!`
       );
     } finally {
       setIsSaving(false);
@@ -273,12 +314,20 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
     setUploadingSlot(`img-${slotIdx}`);
     try {
       const url = await uploadFileToBackend(file, `lehenga-img-${slotIdx + 1}`);
-      const nextSlots = [...imageSlots] as [string, string, string, string];
+      const nextSlots = [...latestSlotsRef.current] as [string, string, string, string];
+      if (slotIdx !== 0 && nextSlots[0] === '/images/lehenga-orange-zardosi.jpg') {
+        nextSlots[0] = '';
+      }
       nextSlots[slotIdx] = url;
+      latestSlotsRef.current = nextSlots;
       setImageSlots(nextSlots);
+      const validPhotosBefore = nextSlots
+        .slice(0, slotIdx)
+        .filter((s) => Boolean(s.trim())).length;
+      setActiveMediaIndex((latestVideoRef.current.trim() ? 1 : 0) + validPhotosBefore);
       await handleSaveCard(
         nextSlots,
-        undefined,
+        latestVideoRef.current,
         undefined,
         `Uploaded & synced Photo ${slotIdx + 1} for ${code}!`
       );
@@ -296,14 +345,16 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
       const urls = await Promise.all(
         files.map((f, idx) => uploadFileToBackend(f, `lehenga-img-${idx + 1}`))
       );
-      const nextSlots = [...imageSlots] as [string, string, string, string];
+      const nextSlots: [string, string, string, string] = ['', '', '', ''];
       for (let i = 0; i < urls.length && i < 4; i++) {
         nextSlots[i] = urls[i];
       }
+      latestSlotsRef.current = nextSlots;
       setImageSlots(nextSlots);
+      setActiveMediaIndex(latestVideoRef.current.trim() ? 1 : 0);
       await handleSaveCard(
         nextSlots,
-        undefined,
+        latestVideoRef.current,
         undefined,
         `Uploaded & synced ${urls.length} photo(s) for ${code}!`
       );
@@ -319,10 +370,11 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
     setUploadingSlot('video');
     try {
       const url = await uploadFileToBackend(file, 'lehenga-video');
+      latestVideoRef.current = url;
       setVideoUrl(url);
       setActiveMediaIndex(0);
       await handleSaveCard(
-        undefined,
+        latestSlotsRef.current,
         url,
         undefined,
         `Uploaded & synced primary looping Video for ${code}!`
@@ -354,18 +406,39 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
           />
         )}
 
-        {/* Top Row: Editable SKU Pill & Quick Actions (Media Drawer, Detail View, Delete) */}
-        <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between gap-2 z-10">
-          <input
-            type="text"
-            value={code}
-            onChange={(e) => setCode(e.target.value.toUpperCase())}
-            onBlur={() => {
-              if (hasUnsavedChanges) handleSaveCard();
-            }}
-            title="Click to edit SKU code"
-            className="w-28 px-2.5 py-1 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] text-[10px] font-mono-num uppercase tracking-wider text-[#4A1525] font-semibold focus:outline-none focus:border-[#D81B60] shadow-xs"
-          />
+        {/* Top Row: Colour Selector Pill & Quick Actions (Media Drawer, Detail View, Delete) */}
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between gap-2 z-10"
+        >
+          <div className="inline-flex items-center gap-1.5 pl-2.5 pr-2 py-1 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] shadow-xs">
+            <span
+              className="w-2.5 h-2.5 rounded-full border border-black/10 shrink-0"
+              style={{ background: getOutfitColorSwatch(code) }}
+            />
+            <select
+              value={code}
+              onChange={(e) => {
+                const nextColor = e.target.value;
+                setCode(nextColor);
+                handleSaveCard(
+                  undefined,
+                  undefined,
+                  undefined,
+                  `Updated colour to ${nextColor} for "${title}"!`,
+                  nextColor
+                );
+              }}
+              title="Select Lehenga Colour"
+              className="bg-transparent text-[10px] uppercase tracking-wider text-[#4A1525] font-semibold focus:outline-none cursor-pointer pr-1"
+            >
+              {LEHENGA_COLOR_OPTIONS.map((opt) => (
+                <option key={opt.label} value={opt.label}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
 
           <div className="flex items-center gap-1.5">
             <button
@@ -497,7 +570,7 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
                   >
                     <div className="w-8 h-10 rounded-md overflow-hidden bg-[#FFF0F5] border border-[#F8BBD0] shrink-0 flex items-center justify-center">
                       {imageSlots[slotIdx] ? (
-                        <img
+                        <OptimizedImage
                           src={imageSlots[slotIdx]}
                           alt={`Photo ${slotIdx + 1}`}
                           className="w-full h-full object-cover object-top"
@@ -706,13 +779,21 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   outfits,
   siteSettings,
+  testimonials = [],
   onUpdateSiteSettings,
   onAddOutfit,
   onUpdateOutfit,
   onDeleteOutfit,
+  onReplyTestimonial,
+  onDeleteTestimonial,
   onBackToCatalog,
 }) => {
-  const [activeTab, setActiveTab] = useState<'lehengas' | 'banner' | 'branding'>('lehengas');
+  const [activeTab, setActiveTab] = useState<
+    'lehengas' | 'banner' | 'branding' | 'reviews' | 'coupons'
+  >('lehengas');
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [newCouponCode, setNewCouponCode] = useState('');
+  const [newCouponPercent, setNewCouponPercent] = useState('10');
   const [successBanner, setSuccessBanner] = useState<string | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
@@ -722,13 +803,111 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setDraftSettings(siteSettings);
   }, [siteSettings]);
 
+  const activeCouponsList = useMemo(
+    () => getNormalizedCoupons(draftSettings),
+    [draftSettings]
+  );
+
+  const handleSaveCouponsList = async (nextCoupons: CouponCodeItem[], toastMsg: string) => {
+    const primary = nextCoupons[0];
+    const nextSettings: SiteSettings = {
+      ...draftSettings,
+      coupons: nextCoupons,
+      couponCode: primary ? primary.code : '',
+      couponDiscountPercent: primary ? primary.discountPercent : 10,
+      couponEnabled: primary ? primary.enabled : false,
+    };
+    setDraftSettings(nextSettings);
+    await handleSaveSettings(nextSettings, toastMsg);
+  };
+
+  const handleAddCoupon = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const cleanCode = newCouponCode.trim().toUpperCase().replace(/\s+/g, '');
+    const pct = Math.max(1, Math.min(99, Number(newCouponPercent) || 10));
+    if (!cleanCode) return;
+
+    const existingIdx = activeCouponsList.findIndex(
+      (c) => c.code.toUpperCase() === cleanCode
+    );
+    let nextList: CouponCodeItem[];
+    if (existingIdx >= 0) {
+      nextList = activeCouponsList.map((c, i) =>
+        i === existingIdx ? { ...c, code: cleanCode, discountPercent: pct, enabled: true } : c
+      );
+    } else {
+      nextList = [
+        {
+          id: `coupon-${Date.now()}`,
+          code: cleanCode,
+          discountPercent: pct,
+          enabled: true,
+        },
+        ...activeCouponsList,
+      ];
+    }
+    setNewCouponCode('');
+    setNewCouponPercent('10');
+    await handleSaveCouponsList(
+      nextList,
+      `Coupon code "${cleanCode}" (${pct}% OFF) saved and enabled!`
+    );
+  };
+
+  const handleToggleCoupon = async (couponId: string) => {
+    let toggledCoupon: CouponCodeItem | undefined;
+    const nextList = activeCouponsList.map((c) => {
+      if (c.id === couponId) {
+        toggledCoupon = { ...c, enabled: !c.enabled };
+        return toggledCoupon;
+      }
+      return c;
+    });
+    if (!toggledCoupon) return;
+    await handleSaveCouponsList(
+      nextList,
+      `Coupon "${toggledCoupon.code}" turned ${toggledCoupon.enabled ? 'ON (Active)' : 'OFF (Disabled)'}!`
+    );
+  };
+
+  const handleUpdateCouponField = async (
+    couponId: string,
+    nextCode: string,
+    nextPercent: number
+  ) => {
+    const cleanCode = nextCode.trim().toUpperCase().replace(/\s+/g, '');
+    if (!cleanCode) return;
+    const pct = Math.max(1, Math.min(99, Number(nextPercent) || 10));
+    const nextList = activeCouponsList.map((c) =>
+      c.id === couponId ? { ...c, code: cleanCode, discountPercent: pct } : c
+    );
+    await handleSaveCouponsList(
+      nextList,
+      `Updated coupon "${cleanCode}" (${pct}% OFF)!`
+    );
+  };
+
+  const handleDeleteCoupon = async (couponId: string, codeLabel: string) => {
+    const nextList = activeCouponsList.filter((c) => c.id !== couponId);
+    await handleSaveCouponsList(nextList, `Deleted coupon code "${codeLabel}".`);
+  };
+
   // Grid Filtering & Sorting (Matches Front End)
   const [selectedVibe, setSelectedVibe] = useState<string>('All Vibes');
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'featured' | 'price-asc' | 'price-desc'>('featured');
+  const [sortBy, setSortBy] = useState<
+    'featured' | 'price-asc' | 'price-desc' | 'under-2000' | '2000-3500' | 'above-3500'
+  >('featured');
+  const [selectedColor, setSelectedColor] = useState<string>('All Colours');
+  const [availabilityFilter, setAvailabilityFilter] = useState<'all' | 'available' | 'booked'>('all');
 
   // Detailed Listing Page Editor state (Matches Front-End LookbookModal layout)
-  const [detailEditOutfit, setDetailEditOutfit] = useState<LehengaOutfit | null>(null);
+  const [detailEditOutfit, setDetailEditOutfitState] = useState<LehengaOutfit | null>(null);
+  const detailEditOutfitRef = useRef<LehengaOutfit | null>(null);
+  const setDetailEditOutfit = (next: LehengaOutfit | null) => {
+    detailEditOutfitRef.current = next;
+    setDetailEditOutfitState(next);
+  };
   const [detailActiveMediaIdx, setDetailActiveMediaIdx] = useState(0);
   const [detailIsZoomed, setDetailIsZoomed] = useState(false);
   const [detailZoomOrigin, setDetailZoomOrigin] = useState({ x: 50, y: 35 });
@@ -764,11 +943,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         if (selectedVibe !== 'All Vibes' && item.vibeCategory !== selectedVibe) {
           return false;
         }
+        const itemColor = resolveOutfitColor(item.color || item.code);
+        if (
+          selectedColor !== 'All Colours' &&
+          itemColor.toLowerCase() !== selectedColor.toLowerCase()
+        ) {
+          return false;
+        }
+        const isAvail = item.available !== false;
+        if (availabilityFilter === 'available' && !isAvail) return false;
+        if (availabilityFilter === 'booked' && isAvail) return false;
+
+        if (sortBy === 'under-2000' && item.pricePerDay >= 2000) return false;
+        if (sortBy === '2000-3500' && (item.pricePerDay < 2000 || item.pricePerDay > 3500)) {
+          return false;
+        }
+        if (sortBy === 'above-3500' && item.pricePerDay <= 3500) return false;
+
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
           return (
             item.title.toLowerCase().includes(q) ||
-            item.code.toLowerCase().includes(q) ||
+            itemColor.toLowerCase().includes(q) ||
             item.description.toLowerCase().includes(q) ||
             item.vibeCategory.toLowerCase().includes(q)
           );
@@ -776,11 +972,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         return true;
       })
       .sort((a, b) => {
-        if (sortBy === 'price-asc') return a.pricePerDay - b.pricePerDay;
-        if (sortBy === 'price-desc') return b.pricePerDay - a.pricePerDay;
+        if (sortBy === 'price-asc' || sortBy === 'under-2000' || sortBy === '2000-3500') {
+          return a.pricePerDay - b.pricePerDay;
+        }
+        if (sortBy === 'price-desc' || sortBy === 'above-3500') {
+          return b.pricePerDay - a.pricePerDay;
+        }
         return 0;
       });
-  }, [outfits, selectedVibe, searchQuery, sortBy]);
+  }, [outfits, selectedVibe, selectedColor, availabilityFilter, searchQuery, sortBy]);
 
   const handleSaveSettings = async (nextSettings: SiteSettings, message: string) => {
     setIsSavingSettings(true);
@@ -796,10 +996,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Create a new lehenga card immediately in the grid so admin can edit it inline or in detail view
   const handleCreateNewListingCard = async () => {
     const nextNum = String(outfits.length + 1).padStart(2, '0');
-    const newCode = `LOL-IND-${nextNum}`;
+    const defaultColor = 'Rani Pink';
     const newOutfit: LehengaOutfit = {
       id: `lol-custom-${Date.now()}`,
-      code: newCode,
+      code: defaultColor,
+      color: defaultColor,
       title: `New Designer Lehenga ${nextNum}`,
       pricePerDay: 2499,
       description:
@@ -819,7 +1020,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       createdAt: new Date().toISOString(),
     };
     await onAddOutfit(newOutfit);
-    showToast(`Added new listing card ${newCode} — edit its photos, video, and text directly below!`);
+    showToast(`Added new listing card — select its colour, upload photos/video, and edit text below!`);
   };
 
   // Detailed Page Editor Media Gallery (4 Photos + 1 Video)
@@ -873,33 +1074,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     slotIdx: number,
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
-    if (!detailEditOutfit) return;
+    if (!detailEditOutfitRef.current) return;
     const file = e.target.files?.[0];
     if (!file) return;
     setDetailUploadingSlot(`img-${slotIdx}`);
     try {
       const uploadedUrl = await uploadFileToBackend(file, `lehenga-img-${slotIdx + 1}`);
-      const existing = Array.isArray(detailEditOutfit.images) ? [...detailEditOutfit.images] : [];
+      const currentOutfit = detailEditOutfitRef.current;
+      if (!currentOutfit) return;
+      const existing = Array.isArray(currentOutfit.images) ? [...currentOutfit.images] : [];
       const slots = [
-        existing[0] || detailEditOutfit.mediaUrl || '',
+        existing[0] || currentOutfit.mediaUrl || '',
         existing[1] || '',
         existing[2] || '',
         existing[3] || '',
       ];
+      if (slotIdx !== 0 && slots[0] === '/images/lehenga-orange-zardosi.jpg') {
+        slots[0] = '';
+      }
       slots[slotIdx] = uploadedUrl;
       const validImages = slots.map((s) => s.trim()).filter(Boolean);
       const primaryMediaUrl =
-        validImages[0] || detailEditOutfit.videoUrl || '/images/lehenga-orange-zardosi.jpg';
+        validImages[0] || currentOutfit.videoUrl || '/images/lehenga-orange-zardosi.jpg';
       const nextOutfit: LehengaOutfit = {
-        ...detailEditOutfit,
+        ...currentOutfit,
         images: validImages,
         mediaUrl: primaryMediaUrl,
-        mediaType: validImages.length > 0 ? 'image' : detailEditOutfit.videoUrl ? 'video' : 'image',
+        mediaType: validImages.length > 0 ? 'image' : currentOutfit.videoUrl ? 'video' : 'image',
       };
-      setDetailActiveMediaIdx(slotIdx);
+      const newIdx = Math.max(0, validImages.indexOf(uploadedUrl));
+      setDetailActiveMediaIdx(newIdx);
       await handleSaveDetailOutfit(
         nextOutfit,
-        `Updated Photo ${slotIdx + 1} for ${detailEditOutfit.code}!`
+        `Updated Photo ${slotIdx + 1} for ${currentOutfit.code}!`
       );
     } finally {
       setDetailUploadingSlot(null);
@@ -908,20 +1115,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleDetailVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!detailEditOutfit) return;
+    if (!detailEditOutfitRef.current) return;
     const file = e.target.files?.[0];
     if (!file) return;
     setDetailUploadingSlot('video');
     try {
       const uploadedUrl = await uploadFileToBackend(file, 'lehenga-video');
+      const currentOutfit = detailEditOutfitRef.current;
+      if (!currentOutfit) return;
       const nextOutfit: LehengaOutfit = {
-        ...detailEditOutfit,
+        ...currentOutfit,
         videoUrl: uploadedUrl,
       };
       setDetailActiveMediaIdx(4);
       await handleSaveDetailOutfit(
         nextOutfit,
-        `Uploaded looping Video for ${detailEditOutfit.code} (now front-grid thumbnail)!`
+        `Uploaded looping Video for ${currentOutfit.code} (now front-grid thumbnail)!`
       );
     } finally {
       setDetailUploadingSlot(null);
@@ -998,17 +1207,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <Palette className="w-3.5 h-3.5" />
               <span>Logos & Brand</span>
             </button>
-          </div>
 
-          <button
-            type="button"
-            onClick={onBackToCatalog}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#4A1525] text-white text-xs font-semibold hover:bg-[#D81B60] transition-colors cursor-pointer"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>View Customer Site</span>
-            <ExternalLink className="w-3 h-3 opacity-75" />
-          </button>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('reviews');
+                setDetailEditOutfit(null);
+              }}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'reviews'
+                  ? 'bg-[#D81B60] text-white shadow-2xs'
+                  : 'text-[#4A1525]/75 hover:text-[#D81B60]'
+              }`}
+            >
+              <MessageCircleHeart className="w-3.5 h-3.5" />
+              <span>Client Reviews ({testimonials.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('coupons');
+                setDetailEditOutfit(null);
+              }}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'coupons'
+                  ? 'bg-[#D81B60] text-white shadow-2xs'
+                  : 'text-[#4A1525]/75 hover:text-[#D81B60]'
+              }`}
+            >
+              <Tag className="w-3.5 h-3.5" />
+              <span>Coupon Codes ({activeCouponsList.filter((c) => c.enabled).length})</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1090,13 +1321,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             {isVideoSlot ? (
                               item.url ? (
                                 <div className="relative w-full h-full bg-[#2B180A]">
-                                  <video
+                                  <VideoPlayer
                                     src={item.url}
+                                    fallbackSrc="/lehenga-reel.mp4"
                                     className="w-full h-full object-cover object-top"
-                                    muted
-                                    loop
-                                    autoPlay
-                                    playsInline
                                   />
                                   <div className="absolute inset-0 bg-black/30 flex flex-col items-center justify-center text-white">
                                     <span className="w-6 h-6 rounded-full bg-white/90 text-[#D81B60] flex items-center justify-center">
@@ -1114,7 +1342,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </div>
                               )
                             ) : item.url ? (
-                              <img
+                              <OptimizedImage
                                 src={item.url}
                                 alt={item.label}
                                 className="w-full h-full object-cover object-top"
@@ -1219,16 +1447,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   >
                     {activeDetailMedia.type === 'video' ? (
                       activeDetailMedia.url ? (
-                        <video
-                          ref={detailMainVideoRef}
-                          key={activeDetailMedia.url}
+                        <VideoPlayer
                           src={activeDetailMedia.url}
+                          fallbackSrc="/lehenga-reel.mp4"
                           className="w-full h-full object-cover object-top"
-                          autoPlay
-                          muted
-                          loop
-                          playsInline
-                          preload="auto"
                         />
                       ) : (
                         <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-3">
@@ -1250,9 +1472,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </div>
                       )
                     ) : activeDetailMedia.url ? (
-                      <img
+                      <OptimizedImage
                         src={activeDetailMedia.url}
                         alt={detailEditOutfit.title}
+                        priority
                         style={{
                           transformOrigin: `${detailZoomOrigin.x}% ${detailZoomOrigin.y}%`,
                         }}
@@ -1278,20 +1501,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                     )}
 
-                    {/* Top-left Editable SKU Pill */}
+                    {/* Top-left Editable Colour Selector Pill */}
                     <div className="absolute top-4 left-4 z-10">
-                      <input
-                        type="text"
-                        value={detailEditOutfit.code}
-                        onChange={(e) =>
-                          setDetailEditOutfit({
-                            ...detailEditOutfit,
-                            code: e.target.value.toUpperCase(),
-                          })
-                        }
-                        onBlur={() => handleSaveDetailOutfit(detailEditOutfit)}
-                        className="w-32 px-3 py-1 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] text-[11px] font-mono-num font-semibold text-[#4A1525] shadow-2xs focus:outline-none focus:border-[#D81B60]"
-                      />
+                      <div className="inline-flex items-center gap-1.5 pl-3 pr-2.5 py-1.5 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] shadow-2xs">
+                        <span
+                          className="w-2.5 h-2.5 rounded-full border border-black/10 shrink-0"
+                          style={{
+                            background: getOutfitColorSwatch(
+                              detailEditOutfit.color || detailEditOutfit.code
+                            ),
+                          }}
+                        />
+                        <select
+                          value={resolveOutfitColor(
+                            detailEditOutfit.color || detailEditOutfit.code
+                          )}
+                          onChange={(e) => {
+                            const nextColor = e.target.value;
+                            const updated = {
+                              ...detailEditOutfit,
+                              code: nextColor,
+                              color: nextColor,
+                            };
+                            setDetailEditOutfit(updated);
+                            handleSaveDetailOutfit(
+                              updated,
+                              `Updated colour to ${nextColor} for "${detailEditOutfit.title}"!`
+                            );
+                          }}
+                          className="bg-transparent text-[11px] uppercase tracking-wider font-semibold text-[#4A1525] focus:outline-none cursor-pointer"
+                        >
+                          {LEHENGA_COLOR_OPTIONS.map((opt) => (
+                            <option key={opt.label} value={opt.label}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
 
                     {/* Floating Zoom Button */}
@@ -1435,9 +1681,100 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <div className="p-3 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0]/60 flex items-center gap-2.5">
                         <Clock className="w-4 h-4 text-[#D81B60] shrink-0" />
                         <span className="text-[11px] font-medium text-[#4A1525]/80">
-                          24-Hr Next-Day Return
+                          On time return
                         </span>
                       </div>
+                    </div>
+
+                    {/* Inline Coupon Code Editor (Matches Front-End Use Coupon Code Box Position) */}
+                    <div className="p-4 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0]/80 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold uppercase tracking-wider text-[#4A1525] flex items-center gap-1.5">
+                          <Tag className="w-3.5 h-3.5 text-[#D81B60]" />
+                          Use Coupon Code (Backend Controls)
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDetailEditOutfit(null);
+                            setActiveTab('coupons');
+                          }}
+                          className="text-[11px] font-semibold text-[#D81B60] hover:underline cursor-pointer"
+                        >
+                          Manage All Coupons →
+                        </button>
+                      </div>
+
+                      {activeCouponsList.map((coupon) => (
+                        <div
+                          key={coupon.id}
+                          className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg bg-white border border-[#F8BBD0]"
+                        >
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={coupon.code}
+                              onChange={(e) => {
+                                const val = e.target.value.toUpperCase();
+                                setDraftSettings((prev) => ({
+                                  ...prev,
+                                  coupons: getNormalizedCoupons(prev).map((c) =>
+                                    c.id === coupon.id ? { ...c, code: val } : c
+                                  ),
+                                }));
+                              }}
+                              onBlur={(e) =>
+                                handleUpdateCouponField(
+                                  coupon.id,
+                                  e.target.value,
+                                  coupon.discountPercent
+                                )
+                              }
+                              className="w-28 px-2.5 py-1 rounded-md bg-[#FFF5F8] border border-[#F8BBD0] text-xs font-bold uppercase tracking-wider text-[#4A1525] focus:outline-none focus:border-[#D81B60]"
+                            />
+                            <div className="inline-flex items-center gap-1">
+                              <input
+                                type="number"
+                                min={1}
+                                max={99}
+                                value={coupon.discountPercent}
+                                onChange={(e) => {
+                                  const pct = Number(e.target.value) || 0;
+                                  setDraftSettings((prev) => ({
+                                    ...prev,
+                                    coupons: getNormalizedCoupons(prev).map((c) =>
+                                      c.id === coupon.id ? { ...c, discountPercent: pct } : c
+                                    ),
+                                  }));
+                                }}
+                                onBlur={(e) =>
+                                  handleUpdateCouponField(
+                                    coupon.id,
+                                    coupon.code,
+                                    Number(e.target.value) || 10
+                                  )
+                                }
+                                className="w-16 px-2 py-1 rounded-md bg-[#FFF5F8] border border-[#F8BBD0] text-xs font-semibold text-[#4A1525] focus:outline-none focus:border-[#D81B60]"
+                              />
+                              <span className="text-xs font-semibold text-[#D81B60]">% OFF</span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleCoupon(coupon.id)}
+                              className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors cursor-pointer ${
+                                coupon.enabled
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-gray-200 text-gray-600'
+                              }`}
+                            >
+                              {coupon.enabled ? 'ON' : 'OFF'}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
 
@@ -1560,31 +1897,69 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   })}
                 </div>
 
-                {/* Search, Sort & Add New Listing Controls */}
-                <div className="flex flex-wrap items-center justify-between md:justify-end gap-3 shrink-0">
-                  <div className="relative">
-                    <Search className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                    <input
-                      type="text"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Filter SKU or title..."
-                      className="pl-8 pr-3 py-2 rounded-full bg-white border border-[#F8BBD0] text-xs text-[#4A1525] focus:outline-none focus:border-[#D81B60] w-44"
-                    />
-                  </div>
-
+                {/* Budget, Colour, Availability & Add New Listing Controls */}
+                <div className="flex flex-wrap items-center justify-between md:justify-end gap-2.5 shrink-0">
                   <div className="relative inline-flex items-center">
                     <ArrowUpDown className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 pointer-events-none" />
                     <select
                       value={sortBy}
                       onChange={(e) =>
-                        setSortBy(e.target.value as 'featured' | 'price-asc' | 'price-desc')
+                        setSortBy(
+                          e.target.value as
+                            | 'featured'
+                            | 'price-asc'
+                            | 'price-desc'
+                            | 'under-2000'
+                            | '2000-3500'
+                            | 'above-3500'
+                        )
                       }
                       className="pl-8 pr-4 py-2 rounded-full bg-white border border-[#F8BBD0] text-xs font-medium text-[#4A1525] focus:outline-none focus:border-[#D81B60] cursor-pointer"
                     >
-                      <option value="featured">Sort: Featured</option>
-                      <option value="price-asc">Rent: Low to High</option>
-                      <option value="price-desc">Rent: High to Low</option>
+                      <option value="featured">Budget: All / Featured</option>
+                      <option value="price-asc">Budget: Low to High</option>
+                      <option value="price-desc">Budget: High to Low</option>
+                      <option value="under-2000">Under ₹2,000 / day</option>
+                      <option value="2000-3500">₹2,000 – ₹3,500 / day</option>
+                      <option value="above-3500">Above ₹3,500 / day</option>
+                    </select>
+                  </div>
+
+                  <div className="relative inline-flex items-center">
+                    {selectedColor === 'All Colours' ? (
+                      <Palette className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 pointer-events-none" />
+                    ) : (
+                      <span
+                        className="w-3 h-3 rounded-full border border-black/15 absolute left-3 pointer-events-none"
+                        style={{ background: getOutfitColorSwatch(selectedColor) }}
+                      />
+                    )}
+                    <select
+                      value={selectedColor}
+                      onChange={(e) => setSelectedColor(e.target.value)}
+                      className="pl-8 pr-4 py-2 rounded-full bg-white border border-[#F8BBD0] text-xs font-medium text-[#4A1525] focus:outline-none focus:border-[#D81B60] cursor-pointer"
+                    >
+                      <option value="All Colours">Colour: All Colours</option>
+                      {LEHENGA_COLOR_OPTIONS.map((opt) => (
+                        <option key={opt.label} value={opt.label}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="relative inline-flex items-center">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 pointer-events-none" />
+                    <select
+                      value={availabilityFilter}
+                      onChange={(e) =>
+                        setAvailabilityFilter(e.target.value as 'all' | 'available' | 'booked')
+                      }
+                      className="pl-8 pr-4 py-2 rounded-full bg-white border border-[#F8BBD0] text-xs font-medium text-[#4A1525] focus:outline-none focus:border-[#D81B60] cursor-pointer"
+                    >
+                      <option value="all">Status: All (Available & Booked)</option>
+                      <option value="available">Status: Available Only</option>
+                      <option value="booked">Status: Booked</option>
                     </select>
                   </div>
 
@@ -1815,20 +2190,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
             <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-[#2B180A] border border-[#F8BBD0]">
               {draftSettings.heroMediaType === 'image' ? (
-                <img
+                <OptimizedImage
                   src={draftSettings.heroPosterUrl}
                   alt="Banner Preview"
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <video
-                  key={draftSettings.heroVideoUrl}
+                <VideoPlayer
                   src={draftSettings.heroVideoUrl}
                   poster={draftSettings.heroPosterUrl}
-                  autoPlay
-                  muted
-                  loop
-                  playsInline
+                  fallbackSrc="/hero-banner.mp4"
                   className="w-full h-full object-cover"
                 />
               )}
@@ -2117,9 +2488,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
               <div className="p-4 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0] flex items-center gap-3 overflow-hidden">
                 {draftSettings.topLogoUrl ? (
-                  <img
+                  <OptimizedImage
                     src={draftSettings.topLogoUrl}
                     alt="Top Logo Preview"
+                    isLogo
                     style={{ height: `${draftSettings.topLogoHeight || 56}px` }}
                     className="w-auto object-contain"
                   />
@@ -2140,9 +2512,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
               <div className="p-5 rounded-xl bg-[#FCE4EC] text-[#4A1525] flex flex-col items-center justify-center overflow-hidden">
                 {draftSettings.bottomLogoUrl ? (
-                  <img
+                  <OptimizedImage
                     src={draftSettings.bottomLogoUrl}
                     alt="Bottom Logo Preview"
+                    isLogo
                     style={{ height: `${draftSettings.bottomLogoHeight || 88}px` }}
                     className="w-auto object-contain"
                   />
@@ -2151,6 +2524,374 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 )}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: CLIENT REVIEWS MANAGER (VIEW ALL, REPLY & DELETE) */}
+      {activeTab === 'reviews' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl p-6 border border-[#F8BBD0] shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="font-editorial text-2xl sm:text-3xl font-semibold text-[#4A1525]">
+                Client Reviews & Studio Replies ({testimonials.length})
+              </h2>
+              <p className="text-xs text-[#4A1525]/65 mt-1">
+                Manage all customer photo reviews here. Write or edit an official studio reply (visible when visitors click the review photo on the front end) or delete unwanted reviews.
+              </p>
+            </div>
+          </div>
+
+          {testimonials.length === 0 ? (
+            <div className="bg-white rounded-2xl p-12 border border-[#F8BBD0] text-center space-y-2">
+              <MessageCircleHeart className="w-8 h-8 text-[#D81B60] mx-auto" />
+              <h3 className="font-editorial text-2xl font-semibold text-[#4A1525]">
+                No Customer Reviews Yet
+              </h3>
+              <p className="text-xs text-[#4A1525]/60">
+                When customers upload their photo & review on the storefront, they will appear here.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {testimonials.map((review) => {
+                const currentReplyDraft =
+                  replyDrafts[review.id] !== undefined
+                    ? replyDrafts[review.id]
+                    : review.adminReply || '';
+
+                return (
+                  <div
+                    key={review.id}
+                    className="bg-white rounded-2xl border border-[#F8BBD0] shadow-xs overflow-hidden flex flex-col sm:flex-row"
+                  >
+                    {/* Left: 4:5 Customer Photo Preview */}
+                    <div className="sm:w-44 aspect-[4/5] bg-[#FFF0F5] relative shrink-0 overflow-hidden">
+                      <OptimizedImage
+                        src={review.photoUrl}
+                        alt={review.customerName}
+                        className="w-full h-full object-cover object-top"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent pointer-events-none" />
+                      <div className="absolute bottom-3 left-3 right-3 text-white pointer-events-none">
+                        <div className="flex items-center gap-0.5 mb-0.5">
+                          {[1, 2, 3, 4, 5].map((s) => (
+                            <Star
+                              key={s}
+                              className={`w-3 h-3 ${
+                                s <= review.rating
+                                  ? 'fill-[#FBBF24] text-[#FBBF24]'
+                                  : 'text-white/40'
+                              }`}
+                            />
+                          ))}
+                          <span className="ml-1 text-[10px] font-semibold">
+                            {review.rating}.0
+                          </span>
+                        </div>
+                        <p className="font-editorial text-lg font-semibold leading-tight truncate">
+                          {review.customerName}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Right: Review Details, Reply Box & Delete Action */}
+                    <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
+                      <div className="space-y-2.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <h3 className="font-editorial text-xl font-semibold text-[#4A1525]">
+                              {review.customerName}
+                            </h3>
+                            <span className="text-[10px] text-[#4A1525]/50 block">
+                              {new Date(review.createdAt).toLocaleDateString('en-IN', {
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric',
+                              })}
+                            </span>
+                          </div>
+
+                          {onDeleteTestimonial && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await onDeleteTestimonial(review.id);
+                                showToast(`Deleted review by ${review.customerName}.`);
+                              }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-600 text-red-600 hover:text-white border border-red-200 text-[11px] font-semibold transition-colors cursor-pointer"
+                              title="Delete this review"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Delete</span>
+                            </button>
+                          )}
+                        </div>
+
+                        <p className="text-xs sm:text-sm text-[#4A1525]/85 italic bg-[#FFF9FB] p-3 rounded-xl border border-[#FCE4EC]">
+                          “{review.quote}”
+                        </p>
+                      </div>
+
+                      {/* Admin Reply Editor */}
+                      <div className="space-y-2 pt-2 border-t border-[#FCE4EC]">
+                        <label className="block text-[10px] uppercase tracking-wider font-bold text-[#D81B60]">
+                          Studio Reply {review.adminReply ? '(Published)' : '(Optional)'}
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={currentReplyDraft}
+                          onChange={(e) =>
+                            setReplyDrafts((prev) => ({
+                              ...prev,
+                              [review.id]: e.target.value,
+                            }))
+                          }
+                          placeholder="Write a warm reply from LOL By Sanjeevani..."
+                          className="w-full p-2.5 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0] text-xs text-[#4A1525] focus:outline-none focus:bg-white focus:border-[#D81B60] resize-none"
+                        />
+                        <div className="flex items-center justify-end gap-2">
+                          {review.adminReply && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                setReplyDrafts((prev) => ({ ...prev, [review.id]: '' }));
+                                if (onReplyTestimonial) {
+                                  await onReplyTestimonial(review.id, '');
+                                  showToast(`Cleared reply for ${review.customerName}.`);
+                                }
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg bg-white border border-[#F8BBD0] text-[11px] text-[#4A1525]/70 hover:text-red-600 font-medium cursor-pointer"
+                            >
+                              Clear Reply
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (onReplyTestimonial) {
+                                await onReplyTestimonial(review.id, currentReplyDraft.trim());
+                                showToast(
+                                  currentReplyDraft.trim()
+                                    ? `Saved studio reply to ${review.customerName}'s review!`
+                                    : `Cleared reply for ${review.customerName}.`
+                                );
+                              }
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#D81B60] hover:bg-[#AD1457] text-white text-[11px] font-semibold transition-colors cursor-pointer"
+                          >
+                            <Send className="w-3 h-3" />
+                            <span>{review.adminReply ? 'Update Reply' : 'Save Reply'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 5: COUPON CODES MANAGER (ADD CODE, PERCENTAGE & ON/OFF TOGGLE) */}
+      {activeTab === 'coupons' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          {/* Left: Add New Coupon Code Form */}
+          <div className="lg:col-span-5 bg-white rounded-2xl p-6 sm:p-8 border border-[#F8BBD0] shadow-xs space-y-6">
+            <div className="border-b border-[#FCE4EC] pb-4">
+              <h2 className="font-editorial text-2xl font-semibold text-[#4A1525]">
+                Add Coupon Code
+              </h2>
+              <p className="text-xs text-[#4A1525]/65 mt-1">
+                Create a discount coupon code and set its percentage reduction. When customers enter an active (ON) code on a lehenga page, the daily rental price is automatically reduced by that percentage.
+              </p>
+            </div>
+
+            <form onSubmit={handleAddCoupon} className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/75 mb-1.5">
+                  Coupon Code *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newCouponCode}
+                  onChange={(e) => setNewCouponCode(e.target.value.toUpperCase())}
+                  placeholder="e.g., LOL10, NAVRATRI20, BRIDE15"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0] text-xs font-bold uppercase tracking-wider text-[#4A1525] placeholder:normal-case placeholder:font-normal focus:outline-none focus:bg-white focus:border-[#D81B60]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/75 mb-1.5">
+                  Discount Percentage (%) *
+                </label>
+                <div className="relative flex items-center">
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    max={99}
+                    value={newCouponPercent}
+                    onChange={(e) => setNewCouponPercent(e.target.value)}
+                    placeholder="e.g., 10"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0] text-xs font-semibold text-[#4A1525] focus:outline-none focus:bg-white focus:border-[#D81B60]"
+                  />
+                  <span className="absolute right-4 text-xs font-bold text-[#D81B60]">
+                    % OFF
+                  </span>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSavingSettings}
+                className="w-full py-3.5 px-6 rounded-xl bg-[#D81B60] hover:bg-[#AD1457] text-white text-xs uppercase tracking-[0.16em] font-semibold transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Coupon Code</span>
+              </button>
+            </form>
+          </div>
+
+          {/* Right: Active & Saved Coupon Codes List with ON/OFF Toggle */}
+          <div className="lg:col-span-7 bg-white rounded-2xl p-6 sm:p-8 border border-[#F8BBD0] shadow-xs space-y-5">
+            <div className="flex items-center justify-between border-b border-[#FCE4EC] pb-4">
+              <div>
+                <h3 className="font-editorial text-2xl font-semibold text-[#4A1525]">
+                  Manage Coupon Codes ({activeCouponsList.length})
+                </h3>
+                <p className="text-xs text-[#4A1525]/65 mt-1">
+                  Edit the code or percentage directly, or use the toggle switch to turn any coupon ON or OFF on the live storefront.
+                </p>
+              </div>
+            </div>
+
+            {activeCouponsList.length === 0 ? (
+              <div className="p-10 rounded-2xl bg-[#FFF5F8] border border-[#F8BBD0]/60 text-center space-y-2">
+                <Tag className="w-7 h-7 text-[#D81B60] mx-auto" />
+                <p className="text-sm font-semibold text-[#4A1525]">
+                  No Coupon Codes Created Yet
+                </p>
+                <p className="text-xs text-[#4A1525]/60">
+                  Use the form on the left to add your first discount code and percentage.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3.5">
+                {activeCouponsList.map((coupon) => (
+                  <div
+                    key={coupon.id}
+                    className={`p-4 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                      coupon.enabled
+                        ? 'bg-[#FFF5F8] border-[#F8BBD0]'
+                        : 'bg-gray-50 border-gray-200 opacity-75'
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div>
+                        <label className="block text-[10px] uppercase tracking-wider text-[#4A1525]/60 font-semibold mb-1">
+                          Coupon Code
+                        </label>
+                        <input
+                          type="text"
+                          value={coupon.code}
+                          onChange={(e) => {
+                            const val = e.target.value.toUpperCase();
+                            setDraftSettings((prev) => ({
+                              ...prev,
+                              coupons: getNormalizedCoupons(prev).map((c) =>
+                                c.id === coupon.id ? { ...c, code: val } : c
+                              ),
+                            }));
+                          }}
+                          onBlur={(e) =>
+                            handleUpdateCouponField(
+                              coupon.id,
+                              e.target.value,
+                              coupon.discountPercent
+                            )
+                          }
+                          className="w-36 px-3 py-2 rounded-xl bg-white border border-[#F8BBD0] text-xs font-bold uppercase tracking-wider text-[#4A1525] focus:outline-none focus:border-[#D81B60]"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] uppercase tracking-wider text-[#4A1525]/60 font-semibold mb-1">
+                          Discount %
+                        </label>
+                        <div className="inline-flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            min={1}
+                            max={99}
+                            value={coupon.discountPercent}
+                            onChange={(e) => {
+                              const pct = Number(e.target.value) || 0;
+                              setDraftSettings((prev) => ({
+                                ...prev,
+                                coupons: getNormalizedCoupons(prev).map((c) =>
+                                  c.id === coupon.id ? { ...c, discountPercent: pct } : c
+                                ),
+                              }));
+                            }}
+                            onBlur={(e) =>
+                              handleUpdateCouponField(
+                                coupon.id,
+                                coupon.code,
+                                Number(e.target.value) || 10
+                              )
+                            }
+                            className="w-20 px-3 py-2 rounded-xl bg-white border border-[#F8BBD0] text-xs font-semibold text-[#4A1525] focus:outline-none focus:border-[#D81B60]"
+                          />
+                          <span className="text-xs font-bold text-[#D81B60]">% OFF</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* ON / OFF Toggle Switch & Delete */}
+                    <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-[#F8BBD0]/50">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleCoupon(coupon.id)}
+                        role="switch"
+                        aria-checked={coupon.enabled}
+                        className="inline-flex items-center gap-2.5 cursor-pointer"
+                      >
+                        <span
+                          className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                            coupon.enabled ? 'bg-emerald-600' : 'bg-gray-300'
+                          }`}
+                        >
+                          <span
+                            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${
+                              coupon.enabled ? 'translate-x-5' : 'translate-x-0'
+                            }`}
+                          />
+                        </span>
+                        <span
+                          className={`text-xs font-bold uppercase tracking-wider ${
+                            coupon.enabled ? 'text-emerald-700' : 'text-gray-500'
+                          }`}
+                        >
+                          {coupon.enabled ? 'ON (Active)' : 'OFF'}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCoupon(coupon.id, coupon.code)}
+                        title="Delete Coupon Code"
+                        className="p-2 rounded-xl bg-white hover:bg-red-50 text-[#4A1525]/50 hover:text-red-600 border border-[#F8BBD0] transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

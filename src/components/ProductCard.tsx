@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Heart, Share2, Film } from 'lucide-react';
-import { LehengaOutfit } from '../types';
+import { LehengaOutfit, resolveOutfitColor, getOutfitColorSwatch } from '../types';
 import { VideoPlayer, resolvePublicVideoPath } from './VideoPlayer';
 import { OptimizedImage, resolveOptimizedImagePath } from './OptimizedImage';
 
@@ -73,7 +73,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const currentMedia = mediaItems[activeMediaIndex] || mediaItems[0];
 
   return (
-    <article className="group flex flex-col bg-white rounded-2xl overflow-hidden border border-[#F8BBD0]/60 hover:border-[#F48FB1] transition-all duration-300 hover:shadow-[0_16px_40px_-12px_rgba(216,27,96,0.14)]">
+    <article className="image group flex flex-col bg-white rounded-2xl overflow-hidden border border-[#F8BBD0]/60 hover:border-[#F48FB1] transition-all duration-300 hover:shadow-[0_16px_40px_-12px_rgba(216,27,96,0.14)]">
       {/* 3:4 Full-Length Portrait Container */}
       <div
         onClick={() => onInspect(outfit)}
@@ -93,10 +93,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           />
         )}
 
-        {/* Subtle Top Row: SKU & Floating Wishlist/Share */}
+        {/* Subtle Top Row: Colour Swatch Pill & Floating Wishlist/Share */}
         <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between z-10">
-          <span className="px-2.5 py-1 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0]/60 text-[10px] font-mono-num uppercase tracking-wider text-[#4A1525] font-semibold">
-            {outfit.code}
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0]/80 text-[10px] uppercase tracking-wider text-[#4A1525] font-semibold shadow-2xs">
+            <span
+              className="w-2.5 h-2.5 rounded-full border border-black/10 shrink-0"
+              style={{ background: getOutfitColorSwatch(outfit.color || outfit.code) }}
+            />
+            <span>{resolveOutfitColor(outfit.color || outfit.code)}</span>
           </span>
 
           <div className="flex items-center gap-1.5">
@@ -160,7 +164,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           {/* Category & Availability */}
           <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.16em] text-[#880E4F]/65 font-semibold mb-1.5">
             <span>{outfit.vibeCategory}</span>
-            <span className="text-emerald-700 font-semibold">Available</span>
+            <span
+              className={`font-semibold ${
+                outfit.available !== false ? 'text-emerald-700' : 'text-amber-600'
+              }`}
+            >
+              {outfit.available !== false ? 'Available' : 'Booked'}
+            </span>
           </div>
 
           {/* Title */}

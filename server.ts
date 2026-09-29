@@ -1,8 +1,13 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
+import heicConvert from 'heic-convert';
+
+const execFileAsync = promisify(execFile);
 import { INITIAL_OUTFITS } from './src/data/initialOutfits.ts';
 import { INITIAL_TESTIMONIALS } from './src/data/initialTestimonials.ts';
 import { DEFAULT_SITE_SETTINGS } from './src/types.ts';
@@ -166,17 +171,58 @@ function saveBase64MediaToPublic(dataUrl: string, prefix = 'outfit'): string {
   const filePath = path.join(UPLOADS_DIR, filename);
   fs.writeFileSync(filePath, buffer);
 
-  // Also write videos directly to public/ root for static Vite production builds
-  if (ext === 'mp4' || ext === 'webm' || ext === 'mov') {
-    const publicRootFile = path.join(__dirname, 'public', filename);
-    fs.writeFileSync(publicRootFile, buffer);
-    if (ext === 'mp4') {
-      fs.writeFileSync(path.join(__dirname, 'public', 'lehenga-reel.mp4'), buffer);
-    }
-    return `/${filename}`;
-  }
-
   return `/uploads/${filename}`;
+}
+
+async function ensureBrowserCompatibleVideo(filePath: string): Promise<void> {
+  if (!filePath.endsWith('.mp4') && !filePath.endsWith('.mov')) return;
+  try {
+    const { stdout } = await execFileAsync('ffprobe', [
+      '-v',
+      'error',
+      '-select_streams',
+      'v:0',
+      '-show_entries',
+      'stream=codec_name,pix_fmt',
+      '-of',
+      'default=noprint_wrappers=1',
+      filePath,
+    ]);
+    const isH264 = stdout.includes('codec_name=h264');
+    const isYuv420p = stdout.includes('pix_fmt=yuv420p') && !stdout.includes('yuv420p10');
+    if (isH264 && isYuv420p) return;
+
+    const tempOut = `${filePath}.h264.mp4`;
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-i',
+      filePath,
+      '-vf',
+      'scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p',
+      '-c:v',
+      'libx264',
+      '-profile:v',
+      'main',
+      '-pix_fmt',
+      'yuv420p',
+      '-preset',
+      'veryfast',
+      '-crf',
+      '24',
+      '-movflags',
+      '+faststart',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '128k',
+      tempOut,
+    ]);
+    if (fs.existsSync(tempOut) && fs.statSync(tempOut).size > 1000) {
+      fs.renameSync(tempOut, filePath);
+    }
+  } catch (err) {
+    console.warn('Video transcode skipped:', err);
+  }
 }
 
 function escapeHtml(str: string): string {
@@ -273,17 +319,139 @@ async function startServer() {
   });
 
   // API: Generic Media Upload (Logo, Banner Image/Video, Lehenga Angles)
-  app.post('/api/upload-media', (req, res) => {
+  app.post('/api/upload-media', async (req, res) => {
     try {
       const { dataUrl, prefix } = req.body;
       if (!dataUrl || typeof dataUrl !== 'string') {
         res.status(400).json({ error: 'Missing dataUrl' });
         return;
       }
-      const savedUrl = saveBase64MediaToPublic(dataUrl, prefix || 'media');
+      let finalDataUrl = dataUrl;
+      const matches = dataUrl.match(/^data:([A-Za-z0-9-+/]+);base64,(.+)$/);
+      if (matches && matches.length === 3) {
+        const rawBuf = Buffer.from(matches[2], 'base64');
+        const header = rawBuf.subarray(4, 12).toString('ascii');
+        if (
+          matches[1].includes('heic') ||
+          matches[1].includes('heif') ||
+          header.includes('ftypheic') ||
+          header.includes('ftypmif1') ||
+          header.includes('ftypheix') ||
+          header.includes('ftyphevc')
+        ) {
+          const jpegBuf = await heicConvert({
+            buffer: rawBuf,
+            format: 'JPEG',
+            quality: 0.9,
+          });
+          finalDataUrl = `data:image/jpeg;base64,${Buffer.from(jpegBuf).toString('base64')}`;
+        }
+      }
+      const savedUrl = saveBase64MediaToPublic(finalDataUrl, prefix || 'media');
+      if (savedUrl.endsWith('.mp4') || savedUrl.endsWith('.mov')) {
+        await ensureBrowserCompatibleVideo(path.join(__dirname, 'public', savedUrl.replace(/^\/+/, '')));
+      }
       res.json({ ok: true, url: savedUrl });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Upload failed' });
+    }
+  });
+
+  // API: Chunked Media Upload for large videos (.mp4 / .mov / .webm) and high-res photos
+  app.post('/api/upload-chunk', (req, res) => {
+    try {
+      const { uploadId, chunkIndex, chunkBase64 } = req.body;
+      if (!uploadId || typeof chunkBase64 !== 'string') {
+        res.status(400).json({ error: 'Missing uploadId or chunkBase64' });
+        return;
+      }
+      const safeId = String(uploadId).replace(/[^a-zA-Z0-9_-]/g, '');
+      const tempPath = path.join(UPLOADS_DIR, `.tmp-${safeId}.part`);
+      const buf = Buffer.from(chunkBase64, 'base64');
+      if (Number(chunkIndex) === 0 && fs.existsSync(tempPath)) {
+        fs.unlinkSync(tempPath);
+      }
+      fs.appendFileSync(tempPath, buf);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Chunk upload failed' });
+    }
+  });
+
+  app.post('/api/upload-finalize', async (req, res) => {
+    try {
+      const { uploadId, prefix, mimeType, fileName } = req.body;
+      if (!uploadId) {
+        res.status(400).json({ error: 'Missing uploadId' });
+        return;
+      }
+      const safeId = String(uploadId).replace(/[^a-zA-Z0-9_-]/g, '');
+      const tempPath = path.join(UPLOADS_DIR, `.tmp-${safeId}.part`);
+      if (!fs.existsSync(tempPath)) {
+        res.status(404).json({ error: 'Upload temp file not found' });
+        return;
+      }
+
+      let rawBuf = fs.readFileSync(tempPath);
+      try {
+        fs.unlinkSync(tempPath);
+      } catch {
+        // ignore
+      }
+
+      const mime = String(mimeType || '').toLowerCase();
+      const lowerName = String(fileName || '').toLowerCase();
+      const header = rawBuf.subarray(4, 12).toString('ascii');
+
+      let ext = 'jpg';
+      if (
+        mime.includes('heic') ||
+        mime.includes('heif') ||
+        lowerName.endsWith('.heic') ||
+        lowerName.endsWith('.heif') ||
+        header.includes('ftypheic') ||
+        header.includes('ftypmif1') ||
+        header.includes('ftypheix') ||
+        header.includes('ftyphevc')
+      ) {
+        const jpegBuf = await heicConvert({
+          buffer: rawBuf,
+          format: 'JPEG',
+          quality: 0.9,
+        });
+        rawBuf = Buffer.from(jpegBuf);
+        ext = 'jpg';
+      } else if (mime.includes('png') || lowerName.endsWith('.png')) {
+        ext = 'png';
+      } else if (mime.includes('webp') || lowerName.endsWith('.webp')) {
+        ext = 'webp';
+      } else if (mime.includes('gif') || lowerName.endsWith('.gif')) {
+        ext = 'gif';
+      } else if (mime.includes('webm') || lowerName.endsWith('.webm')) {
+        ext = 'webm';
+      } else if (
+        mime.includes('mp4') ||
+        mime.includes('quicktime') ||
+        mime.includes('mov') ||
+         mime.includes('video') ||
+        lowerName.endsWith('.mp4') ||
+        lowerName.endsWith('.mov')
+      ) {
+        // Save .mov / .mp4 with .mp4 extension so HTML5 <video> plays it smoothly
+        ext = 'mp4';
+      }
+
+      const safePrefix = String(prefix || 'media').replace(/[^a-zA-Z0-9_-]/g, '');
+      const finalName = `${safePrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
+      const finalPath = path.join(UPLOADS_DIR, finalName);
+      fs.writeFileSync(finalPath, rawBuf);
+      if (ext === 'mp4') {
+        await ensureBrowserCompatibleVideo(finalPath);
+      }
+
+      res.json({ ok: true, url: `/uploads/${finalName}` });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Finalize failed' });
     }
   });
 
@@ -352,6 +520,20 @@ async function startServer() {
   // API: Get & Create Customer Testimonials (Indore Client Reviews + 1 Photo)
   app.get('/api/testimonials', (_req, res) => {
     res.json(loadTestimonials());
+  });
+
+  app.put('/api/testimonials/sync', (req, res) => {
+    try {
+      const { testimonials } = req.body;
+      if (!Array.isArray(testimonials)) {
+        res.status(400).json({ error: 'Invalid testimonials array' });
+        return;
+      }
+      saveTestimonials(testimonials);
+      res.json(testimonials);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to sync testimonials' });
+    }
   });
 
   app.post('/api/testimonials', (req, res) => {

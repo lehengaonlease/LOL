@@ -5,6 +5,7 @@ export type VibeCategory = string;
 export interface LehengaOutfit {
   id: string;
   code: string;
+  color?: string;
   title: string;
   pricePerDay: number;
   description: string;
@@ -18,6 +19,52 @@ export interface LehengaOutfit {
   sizes: string[];
   available: boolean;
   createdAt: string;
+}
+
+export interface LehengaColorOption {
+  label: string;
+  swatch: string;
+}
+
+export const LEHENGA_COLOR_OPTIONS: LehengaColorOption[] = [
+  { label: 'Rani Pink', swatch: '#D81B60' },
+  { label: 'Sunset Orange', swatch: '#EA580C' },
+  { label: 'Crimson Red', swatch: '#DC2626' },
+  { label: 'Haldi Yellow', swatch: '#EAB308' },
+  { label: 'Emerald Green', swatch: '#059669' },
+  { label: 'Royal Blue', swatch: '#2563EB' },
+  { label: 'Wine Maroon', swatch: '#7F1D1D' },
+  { label: 'Pastel Blush', swatch: '#F472B6' },
+  { label: 'Ivory Gold', swatch: '#D4AF37' },
+  { label: 'Lavender Lilac', swatch: '#A855F7' },
+  { label: 'Midnight Black', swatch: '#18181B' },
+  { label: 'Multi-Colour', swatch: 'linear-gradient(135deg, #D81B60, #F59E0B, #2563EB)' },
+];
+
+export function resolveOutfitColor(rawCodeOrColor?: string): string {
+  const cleaned = (rawCodeOrColor || '').trim();
+  if (!cleaned || /^LOL-IND/i.test(cleaned)) {
+    return 'Sunset Orange';
+  }
+  const matched = LEHENGA_COLOR_OPTIONS.find(
+    (opt) => opt.label.toLowerCase() === cleaned.toLowerCase()
+  );
+  return matched ? matched.label : cleaned;
+}
+
+export function getOutfitColorSwatch(colorLabel?: string): string {
+  const resolved = resolveOutfitColor(colorLabel);
+  const matched = LEHENGA_COLOR_OPTIONS.find(
+    (opt) => opt.label.toLowerCase() === resolved.toLowerCase()
+  );
+  return matched ? matched.swatch : '#D81B60';
+}
+
+export interface CouponCodeItem {
+  id: string;
+  code: string;
+  discountPercent: number;
+  enabled: boolean;
 }
 
 export interface SiteSettings {
@@ -38,6 +85,10 @@ export interface SiteSettings {
   catalogSectionKicker?: string;
   catalogSectionTitle?: string;
   catalogSectionSubtitle?: string;
+  couponCode?: string;
+  couponDiscountPercent?: number;
+  couponEnabled?: boolean;
+  coupons?: CouponCodeItem[];
 }
 
 export const DEFAULT_SITE_SETTINGS: SiteSettings = {
@@ -60,7 +111,49 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   catalogSectionTitle: 'The Garba Night Essentials',
   catalogSectionSubtitle:
     "Every piece is custom-fitted to survive your wildest Garba steps, Heavy mirror work, vibrant traditional prints, and massive custom-altered flares that demand a slow-mo reel. Sanitized, perfectly fitted to your waist, and ready to sweep Indore's biggest grounds.",
+  couponCode: 'LOL10',
+  couponDiscountPercent: 10,
+  couponEnabled: true,
+  coupons: [
+    {
+      id: 'coupon-default-1',
+      code: 'LOL10',
+      discountPercent: 10,
+      enabled: true,
+    },
+  ],
 };
+
+export function getNormalizedCoupons(settings?: SiteSettings): CouponCodeItem[] {
+  if (!settings) return DEFAULT_SITE_SETTINGS.coupons || [];
+  if (Array.isArray(settings.coupons) && settings.coupons.length > 0) {
+    return settings.coupons;
+  }
+  if (settings.couponCode && settings.couponCode.trim()) {
+    return [
+      {
+        id: 'coupon-primary',
+        code: settings.couponCode.trim().toUpperCase(),
+        discountPercent: Math.max(1, Math.min(99, Number(settings.couponDiscountPercent) || 10)),
+        enabled: settings.couponEnabled !== false,
+      },
+    ];
+  }
+  return [];
+}
+
+export function findMatchingActiveCoupon(
+  rawInput: string,
+  settings?: SiteSettings
+): CouponCodeItem | null {
+  const clean = (rawInput || '').trim().toUpperCase();
+  if (!clean) return null;
+  const list = getNormalizedCoupons(settings);
+  const found = list.find(
+    (c) => c.enabled && c.code.trim().toUpperCase() === clean && c.discountPercent > 0
+  );
+  return found || null;
+}
 
 export function normalizeStudioWhatsAppDisplay(raw?: string): string {
   const digits = (raw || '').replace(/\D/g, '');
@@ -137,4 +230,6 @@ export interface CustomerTestimonial {
   photoUrl: string;
   outfitCode?: string;
   createdAt: string;
+  adminReply?: string;
+  adminRepliedAt?: string;
 }

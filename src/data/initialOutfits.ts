@@ -3,7 +3,8 @@ import { LehengaOutfit } from '../types';
 export const INITIAL_OUTFITS: LehengaOutfit[] = [
   {
     id: 'lol-ind-06',
-    code: 'LOL-IND-06',
+    code: 'Sunset Orange',
+    color: 'Sunset Orange',
     title: "The 'Golden Hour Reel' Sunset Ombre Organza",
     pricePerDay: 1999,
     description:

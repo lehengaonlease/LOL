@@ -11,8 +11,18 @@ import {
   Play,
   ShieldCheck,
   Clock,
+  Tag,
+  CheckCircle2,
+  X,
 } from 'lucide-react';
-import { LehengaOutfit } from '../types';
+import {
+  LehengaOutfit,
+  SiteSettings,
+  CouponCodeItem,
+  resolveOutfitColor,
+  getOutfitColorSwatch,
+  findMatchingActiveCoupon,
+} from '../types';
 import { ProductCard } from './ProductCard';
 import { VideoPlayer, resolvePublicVideoPath } from './VideoPlayer';
 import { OptimizedImage, resolveOptimizedImagePath } from './OptimizedImage';
@@ -20,6 +30,7 @@ import { OptimizedImage, resolveOptimizedImagePath } from './OptimizedImage';
 interface LookbookModalProps {
   outfit: LehengaOutfit | null;
   allOutfits?: LehengaOutfit[];
+  siteSettings?: SiteSettings;
   wishlist?: string[];
   onClose: () => void;
   onSelectOutfit?: (outfit: LehengaOutfit) => void;
@@ -32,6 +43,7 @@ interface LookbookModalProps {
 export const LookbookModal: React.FC<LookbookModalProps> = ({
   outfit,
   allOutfits = [],
+  siteSettings,
   wishlist = [],
   onClose,
   onSelectOutfit,
@@ -44,18 +56,42 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
   const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 35 });
   const [selectedSize, setSelectedSize] = useState<string>('');
   const [activeMediaIdx, setActiveMediaIdx] = useState(0);
+  const [couponInput, setCouponInput] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<CouponCodeItem | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
 
   useEffect(() => {
     setIsZoomed(false);
     setZoomOrigin({ x: 50, y: 35 });
     setSelectedSize('');
     setActiveMediaIdx(0);
+    setCouponInput('');
+    setAppliedCoupon(null);
+    setCouponError(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [outfit?.id]);
+
+  // Re-validate applied coupon if admin toggles it off or changes percentage in real time
+  useEffect(() => {
+    if (!appliedCoupon) return;
+    const stillValid = findMatchingActiveCoupon(appliedCoupon.code, siteSettings);
+    if (!stillValid) {
+      setAppliedCoupon(null);
+      setCouponError('This coupon code is no longer active.');
+    } else if (stillValid.discountPercent !== appliedCoupon.discountPercent) {
+      setAppliedCoupon(stillValid);
+    }
+  }, [siteSettings, appliedCoupon]);
 
   const mediaGallery = useMemo(() => {
     if (!outfit) return [];
     const list: { type: 'image' | 'video'; url: string; label: string }[] = [];
+
+    const vid = (outfit.videoUrl || (outfit.mediaType === 'video' ? outfit.mediaUrl : '')).trim();
+    if (vid) {
+      list.push({ type: 'video', url: resolvePublicVideoPath(vid), label: 'Twirl Video' });
+    }
+
     const imgs =
       Array.isArray(outfit.images) && outfit.images.length > 0
         ? outfit.images.filter(Boolean).slice(0, 4)
@@ -66,11 +102,6 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
     imgs.forEach((url, idx) => {
       list.push({ type: 'image', url: resolveOptimizedImagePath(url), label: `Look ${idx + 1}` });
     });
-
-    const vid = outfit.videoUrl || (outfit.mediaType === 'video' ? outfit.mediaUrl : '');
-    if (vid) {
-      list.push({ type: 'video', url: resolvePublicVideoPath(vid), label: 'Twirl Video' });
-    }
 
     if (list.length === 0) {
       list.push({
@@ -87,6 +118,38 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
   if (!outfit) return null;
 
   const currentSize = selectedSize || outfit.sizes[0] || 'M';
+  const originalPricePerDay = outfit.pricePerDay;
+  const effectivePricePerDay = appliedCoupon
+    ? Math.max(
+        1,
+        Math.round(originalPricePerDay * (1 - appliedCoupon.discountPercent / 100))
+      )
+    : originalPricePerDay;
+  const savedPerDay = Math.max(0, originalPricePerDay - effectivePricePerDay);
+
+  const handleApplyCoupon = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setCouponError(null);
+    const trimmed = couponInput.trim().toUpperCase();
+    if (!trimmed) {
+      setCouponError('Please enter a coupon code.');
+      return;
+    }
+    const matched = findMatchingActiveCoupon(trimmed, siteSettings);
+    if (!matched) {
+      setAppliedCoupon(null);
+      setCouponError('Invalid or inactive coupon code.');
+      return;
+    }
+    setAppliedCoupon(matched);
+    setCouponInput(matched.code);
+  };
+
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null);
+    setCouponInput('');
+    setCouponError(null);
+  };
 
   const relatedOutfits = allOutfits
     .filter((item) => item.id !== outfit.id)
@@ -121,8 +184,12 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
             <ChevronRight className="w-3.5 h-3.5 text-[#4A1525]/35 hidden sm:block" />
             <span className="hidden sm:inline text-[#4A1525]/60">{outfit.vibeCategory}</span>
             <ChevronRight className="w-3.5 h-3.5 text-[#4A1525]/35 hidden sm:block" />
-            <span className="hidden sm:inline font-mono-num font-semibold text-[#D81B60]">
-              {outfit.code}
+            <span className="hidden sm:inline-flex items-center gap-1.5 font-semibold text-[#D81B60]">
+              <span
+                className="w-2.5 h-2.5 rounded-full border border-black/10"
+                style={{ background: getOutfitColorSwatch(outfit.color || outfit.code) }}
+              />
+              <span>{resolveOutfitColor(outfit.color || outfit.code)}</span>
             </span>
           </div>
         </div>
@@ -216,10 +283,14 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
                 />
               )}
 
-              {/* Top-left SKU Pill */}
+              {/* Top-left Colour Swatch Pill */}
               <div className="absolute top-4 left-4 z-10">
-                <span className="px-3 py-1 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] text-[11px] font-mono-num font-semibold text-[#4A1525] shadow-2xs">
-                  {outfit.code}
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] text-[11px] font-semibold text-[#4A1525] shadow-2xs">
+                  <span
+                    className="w-2.5 h-2.5 rounded-full border border-black/10 shrink-0"
+                    style={{ background: getOutfitColorSwatch(outfit.color || outfit.code) }}
+                  />
+                  <span>{resolveOutfitColor(outfit.color || outfit.code)}</span>
                 </span>
               </div>
 
@@ -274,9 +345,19 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
 
                 <div className="mt-4 flex items-baseline gap-3 flex-wrap">
                   <span className="text-3xl sm:text-4xl font-semibold text-[#4A1525]">
-                    ₹{outfit.pricePerDay.toLocaleString('en-IN')}
+                    ₹{effectivePricePerDay.toLocaleString('en-IN')}
                     <span className="text-sm font-normal text-[#4A1525]/60"> / day rental</span>
                   </span>
+                  {appliedCoupon && (
+                    <>
+                      <span className="text-lg text-[#4A1525]/45 line-through font-medium">
+                        ₹{originalPricePerDay.toLocaleString('en-IN')}
+                      </span>
+                      <span className="text-xs font-semibold text-emerald-700">
+                        {appliedCoupon.discountPercent}% OFF ({appliedCoupon.code})
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -322,9 +403,73 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
                 <div className="p-3 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0]/60 flex items-center gap-2.5">
                   <Clock className="w-4 h-4 text-[#D81B60] shrink-0" />
                   <span className="text-[11px] font-medium text-[#4A1525]/80">
-                    24-Hr Next-Day Return
+                    On time return
                   </span>
                 </div>
+              </div>
+
+              {/* Use Coupon Code Box */}
+              <div className="p-4 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0]/80 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-[#4A1525] flex items-center gap-1.5">
+                    <Tag className="w-3.5 h-3.5 text-[#D81B60]" />
+                    Use Coupon Code
+                  </span>
+                  {appliedCoupon && (
+                    <span className="text-[11px] font-semibold text-emerald-700">
+                      -{appliedCoupon.discountPercent}% Discount Applied
+                    </span>
+                  )}
+                </div>
+
+                <form onSubmit={handleApplyCoupon} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={couponInput}
+                    onChange={(e) => {
+                      setCouponInput(e.target.value.toUpperCase());
+                      if (couponError) setCouponError(null);
+                    }}
+                    placeholder="Enter coupon code"
+                    className="flex-1 px-3.5 py-2.5 rounded-lg bg-white border border-[#F8BBD0] text-xs font-semibold uppercase tracking-wider text-[#4A1525] placeholder:normal-case placeholder:font-normal placeholder:tracking-normal focus:outline-none focus:border-[#D81B60]"
+                  />
+                  {appliedCoupon &&
+                  couponInput.trim().toUpperCase() === appliedCoupon.code.toUpperCase() ? (
+                    <button
+                      type="button"
+                      onClick={handleRemoveCoupon}
+                      className="px-4 py-2.5 rounded-lg border border-[#F8BBD0] bg-white hover:bg-[#FFF0F5] text-xs font-semibold text-[#D81B60] transition-colors inline-flex items-center gap-1 cursor-pointer shrink-0"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Remove</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="submit"
+                      className="px-4 py-2.5 rounded-lg bg-[#D81B60] hover:bg-[#AD1457] text-white text-xs font-semibold uppercase tracking-wider transition-colors cursor-pointer shrink-0"
+                    >
+                      Apply
+                    </button>
+                  )}
+                </form>
+
+                {couponError && (
+                  <p className="text-[11px] font-medium text-red-600">{couponError}</p>
+                )}
+
+                {appliedCoupon && !couponError && (
+                  <div className="flex items-center justify-between gap-2 pt-1 text-[11px] font-medium text-emerald-700">
+                    <span className="inline-flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        Code <strong>{appliedCoupon.code}</strong> applied ({appliedCoupon.discountPercent}% OFF)
+                      </span>
+                    </span>
+                    <span className="font-semibold">
+                      You save ₹{savedPerDay.toLocaleString('en-IN')}/day
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -341,11 +486,24 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
 
               <button
                 type="button"
-                onClick={() => onRent(outfit)}
+                onClick={() =>
+                  onRent(
+                    appliedCoupon
+                      ? {
+                          ...outfit,
+                          pricePerDay: effectivePricePerDay,
+                        }
+                      : outfit
+                  )
+                }
                 className="flex-1 py-4 px-6 rounded-2xl bg-[#4A1525] text-white text-xs uppercase tracking-[0.16em] font-semibold hover:bg-[#D81B60] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer shadow-sm"
               >
                 <Sparkles className="w-4 h-4" />
-                <span>Reserve This Lehenga</span>
+                <span>
+                  {appliedCoupon
+                    ? `Reserve at ₹${effectivePricePerDay.toLocaleString('en-IN')}/day`
+                    : 'Reserve This Lehenga'}
+                </span>
               </button>
             </div>
           </div>
