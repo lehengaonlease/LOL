@@ -20,7 +20,7 @@ import {
   CheckCircle2,
   X,
 } from 'lucide-react';
-import { INITIAL_OUTFITS } from './data/initialOutfits';
+import { INITIAL_OUTFITS, BUNDLED_CATALOG_UPDATED_AT } from './data/initialOutfits';
 import { INITIAL_TESTIMONIALS } from './data/initialTestimonials';
 import {
   LehengaOutfit,
@@ -64,7 +64,7 @@ import {
   toggleTaskStatus,
 } from './services/googleTasksService';
 
-const STORAGE_KEY_OUTFITS = 'lol_indore_outfits_v4';
+const STORAGE_KEY_OUTFITS = 'lol_indore_outfits_v5';
 const STORAGE_KEY_TASKS = 'lol_indore_tasks_v2';
 const STORAGE_KEY_WISHLIST = 'lol_indore_wishlist_v2';
 const STORAGE_KEY_SITE_SETTINGS = 'lol_indore_site_settings_v4';
@@ -139,10 +139,11 @@ export function App() {
 
   const [outfits, setOutfits] = useState<LehengaOutfit[]>(() => {
     try {
+      const localTs = Number(localStorage.getItem('lol_local_catalog_updated_at_v1') || '0');
       const saved = localStorage.getItem(STORAGE_KEY_OUTFITS);
-      if (saved !== null) {
+      if (saved !== null && localTs >= BUNDLED_CATALOG_UPDATED_AT) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
     } catch {
       // ignore
@@ -487,13 +488,6 @@ export function App() {
         if (selectedVibe !== 'All Vibes' && item.vibeCategory !== selectedVibe) {
           return false;
         }
-        const itemColor = resolveOutfitColor(item.color || item.code);
-        if (
-          selectedColor !== 'All Colours' &&
-          itemColor.toLowerCase() !== selectedColor.toLowerCase()
-        ) {
-          return false;
-        }
         const isAvail = item.available !== false;
         if (availabilityFilter === 'available' && !isAvail) return false;
         if (availabilityFilter === 'booked' && isAvail) return false;
@@ -507,10 +501,9 @@ export function App() {
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
           const matchTitle = item.title.toLowerCase().includes(q);
-          const matchColor = itemColor.toLowerCase().includes(q);
           const matchDesc = item.description.toLowerCase().includes(q);
           const matchVibe = item.vibeCategory.toLowerCase().includes(q);
-          return matchTitle || matchColor || matchDesc || matchVibe;
+          return matchTitle || matchDesc || matchVibe;
         }
         return true;
       })
@@ -879,36 +872,7 @@ export function App() {
                   </select>
                 </div>
 
-                {/* 2. Colour Filter */}
-                <div className="relative inline-flex items-center">
-                  {selectedColor === 'All Colours' ? (
-                    <Palette className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 pointer-events-none" />
-                  ) : (
-                    <span
-                      className="w-3 h-3 rounded-full border border-black/15 absolute left-3 pointer-events-none"
-                      style={{ background: getOutfitColorSwatch(selectedColor) }}
-                    />
-                  )}
-                  <select
-                    value={selectedColor}
-                    onChange={(e) => setSelectedColor(e.target.value)}
-                    aria-label="Filter by Colour"
-                    className={`pl-8 pr-4 py-2 rounded-full border text-xs font-medium focus:outline-none cursor-pointer transition-colors ${
-                      selectedColor !== 'All Colours'
-                        ? 'bg-[#FFF0F5] border-[#D81B60] text-[#D81B60] font-semibold'
-                        : 'bg-white border-[#F8BBD0] text-[#4A1525] focus:border-[#D81B60]'
-                    }`}
-                  >
-                    <option value="All Colours">Colour: All Colours</option>
-                    {LEHENGA_COLOR_OPTIONS.map((opt) => (
-                      <option key={opt.label} value={opt.label}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* 3. Availability Filter (Available / Booked) */}
+                {/* 2. Availability Filter (Available / Booked) */}
                 <div className="relative inline-flex items-center">
                   <CheckCircle2 className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 pointer-events-none" />
                   <select
@@ -930,14 +894,11 @@ export function App() {
                 </div>
 
                 {/* Clear Active Filters Button */}
-                {(sortBy !== 'featured' ||
-                  selectedColor !== 'All Colours' ||
-                  availabilityFilter !== 'all') && (
+                {(sortBy !== 'featured' || availabilityFilter !== 'all') && (
                   <button
                     type="button"
                     onClick={() => {
                       setSortBy('featured');
-                      setSelectedColor('All Colours');
                       setAvailabilityFilter('all');
                     }}
                     className="inline-flex items-center gap-1 px-3 py-2 rounded-full bg-[#4A1525] text-white text-xs font-semibold hover:bg-[#D81B60] transition-colors cursor-pointer"

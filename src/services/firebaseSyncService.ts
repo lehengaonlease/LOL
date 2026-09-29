@@ -15,6 +15,7 @@ import {
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { LehengaOutfit, SiteSettings, CustomerTestimonial } from '../types';
+import { BUNDLED_CATALOG_UPDATED_AT } from '../data/initialOutfits';
 import heic2any from 'heic2any';
 
 // Silence internal @firebase/firestore SDK console errors/warnings (e.g. free-tier quota backoff logs)
@@ -703,7 +704,10 @@ export function subscribeToLiveStore({
   onTestimonialsChange,
 }: LiveStoreCallbacks): () => void {
   let isDisposed = false;
+  let hasLiveBackendServer = false;
   lastEmittedOutfitsJson = JSON.stringify(initialOutfits);
+  let lastEmittedSettingsJson = '';
+  let lastEmittedTestimonialsJson = '';
 
   const emitIfChanged = (nextOutfits: LehengaOutfit[]) => {
     if (activeMutationsCount > 0) return;
@@ -714,34 +718,54 @@ export function subscribeToLiveStore({
   };
 
   const syncWithBackendServer = async () => {
-    if (activeMutationsCount > 0) return;
+    if (activeMutationsCount > 0 || isDisposed) return;
     try {
       const [outfitsRes, settingsRes, testimonialsRes] = await Promise.all([
-        fetch('/api/outfits'),
-        fetch('/api/settings'),
-        fetch('/api/testimonials'),
+        fetch('/api/outfits', { cache: 'no-store' }),
+        fetch('/api/settings', { cache: 'no-store' }),
+        fetch('/api/testimonials', { cache: 'no-store' }),
       ]);
 
       if (isDisposed || activeMutationsCount > 0) return;
 
-      if (outfitsRes.ok) {
+      if (
+        outfitsRes.ok &&
+        (outfitsRes.headers.get('content-type') || '').includes('application/json')
+      ) {
+        hasLiveBackendServer = true;
         const serverOutfits = (await outfitsRes.json()) as LehengaOutfit[];
         if (Array.isArray(serverOutfits) && serverOutfits.length > 0) {
           emitIfChanged(serverOutfits);
         }
       }
 
-      if (settingsRes.ok) {
+      if (
+        settingsRes.ok &&
+        (settingsRes.headers.get('content-type') || '').includes('application/json')
+      ) {
+        hasLiveBackendServer = true;
         const serverSettings = (await settingsRes.json()) as SiteSettings;
         if (serverSettings && typeof serverSettings === 'object') {
-          onSettingsChange(serverSettings);
+          const nextSettingsJson = JSON.stringify(serverSettings);
+          if (nextSettingsJson !== lastEmittedSettingsJson) {
+            lastEmittedSettingsJson = nextSettingsJson;
+            onSettingsChange(serverSettings);
+          }
         }
       }
 
-      if (testimonialsRes.ok) {
+      if (
+        testimonialsRes.ok &&
+        (testimonialsRes.headers.get('content-type') || '').includes('application/json')
+      ) {
+        hasLiveBackendServer = true;
         const serverTestimonials = (await testimonialsRes.json()) as CustomerTestimonial[];
         if (Array.isArray(serverTestimonials) && serverTestimonials.length > 0) {
-          onTestimonialsChange(serverTestimonials);
+          const nextTestJson = JSON.stringify(serverTestimonials);
+          if (nextTestJson !== lastEmittedTestimonialsJson) {
+            lastEmittedTestimonialsJson = nextTestJson;
+            onTestimonialsChange(serverTestimonials);
+          }
         }
       }
     } catch {
@@ -751,25 +775,26 @@ export function subscribeToLiveStore({
 
   syncWithBackendServer();
 
-  const pollTimer = setInterval(async () => {
-    if (isDisposed || activeMutationsCount > 0) return;
-    try {
-      const outfitsRes = await fetch('/api/outfits');
-      if (outfitsRes.ok && !isDisposed && activeMutationsCount === 0) {
-        const serverOutfits = (await outfitsRes.json()) as LehengaOutfit[];
-        if (Array.isArray(serverOutfits) && serverOutfits.length > 0) {
-          emitIfChanged(serverOutfits);
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }, 4000);
+  const pollTimer = setInterval(() => {
+    syncWithBackendServer();
+  }, 1500);
+
+  const handleWindowFocus = () => {
+    syncWithBackendServer();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', handleWindowFocus);
+    document.addEventListener('visibilitychange', handleWindowFocus);
+  }
 
   if (isWriteQuotaExhausted) {
     return () => {
       isDisposed = true;
       clearInterval(pollTimer);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', handleWindowFocus);
+        document.removeEventListener('visibilitychange', handleWindowFocus);
+      }
     };
   }
 
@@ -780,11 +805,17 @@ export function subscribeToLiveStore({
   let outfitsCollectionLoaded = false;
 
   const emitOrderedOutfits = () => {
+    if (hasLiveBackendServer) {
+      // When connected to the live Express server (ais-dev / ais-pre), /api/outfits is authoritative
+      return;
+    }
     if (!catalogMetaLoaded || !outfitsCollectionLoaded) return;
     if (latestOutfitsMap.size === 0 || activeMutationsCount > 0) return;
 
-    const localTs = getLocalCatalogTimestamp();
-    if (localTs > 0 && latestMetaUpdatedAt > 0 && latestMetaUpdatedAt < localTs) {
+    const minValidTimestamp = Math.max(getLocalCatalogTimestamp(), BUNDLED_CATALOG_UPDATED_AT);
+    if (latestMetaUpdatedAt < minValidTimestamp) {
+      // Firestore holds stale documents from before the daily write quota was reached;
+      // keep the newer bundled/server catalog instead of reverting to old drafts.
       return;
     }
 
@@ -857,11 +888,11 @@ export function subscribeToLiveStore({
   const unsubSettings = onSnapshot(
     doc(db, 'store_state', 'settings'),
     (snap) => {
-      if (!snap.exists()) return;
+      if (hasLiveBackendServer || !snap.exists()) return;
       const data = snap.data();
       const remoteTs = typeof data?.updatedAt === 'number' ? data.updatedAt : 0;
-      const localTs = getLocalSettingsTimestamp();
-      if (localTs > 0 && remoteTs > 0 && remoteTs < localTs) {
+      const localTs = Math.max(getLocalSettingsTimestamp(), BUNDLED_CATALOG_UPDATED_AT);
+      if (remoteTs < localTs) {
         return;
       }
       if (data?.settings && typeof data.settings === 'object') {
@@ -876,7 +907,7 @@ export function subscribeToLiveStore({
   const unsubTestimonials = onSnapshot(
     doc(db, 'store_state', 'testimonials'),
     (snap) => {
-      if (!snap.exists()) return;
+      if (hasLiveBackendServer || !snap.exists()) return;
       const data = snap.data();
       if (Array.isArray(data?.items)) {
         onTestimonialsChange(data.items as CustomerTestimonial[]);
@@ -890,6 +921,10 @@ export function subscribeToLiveStore({
   return () => {
     isDisposed = true;
     clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('focus', handleWindowFocus);
+      document.removeEventListener('visibilitychange', handleWindowFocus);
+    }
     unsubMeta();
     unsubOutfits();
     unsubSettings();

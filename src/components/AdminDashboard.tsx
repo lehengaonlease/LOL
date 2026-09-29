@@ -406,40 +406,11 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
           />
         )}
 
-        {/* Top Row: Colour Selector Pill & Quick Actions (Media Drawer, Detail View, Delete) */}
+        {/* Top Row: Quick Actions (Media Drawer, Detail View, Delete) */}
         <div
           onClick={(e) => e.stopPropagation()}
-          className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between gap-2 z-10"
+          className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-end gap-2 z-10"
         >
-          <div className="inline-flex items-center gap-1.5 pl-2.5 pr-2 py-1 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0] shadow-xs">
-            <span
-              className="w-2.5 h-2.5 rounded-full border border-black/10 shrink-0"
-              style={{ background: getOutfitColorSwatch(code) }}
-            />
-            <select
-              value={code}
-              onChange={(e) => {
-                const nextColor = e.target.value;
-                setCode(nextColor);
-                handleSaveCard(
-                  undefined,
-                  undefined,
-                  undefined,
-                  `Updated colour to ${nextColor} for "${title}"!`,
-                  nextColor
-                );
-              }}
-              title="Select Lehenga Colour"
-              className="bg-transparent text-[10px] uppercase tracking-wider text-[#4A1525] font-semibold focus:outline-none cursor-pointer pr-1"
-            >
-              {LEHENGA_COLOR_OPTIONS.map((opt) => (
-                <option key={opt.label} value={opt.label}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
           <div className="flex items-center gap-1.5">
             <button
               type="button"
@@ -1922,29 +1893,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <option value="under-2000">Under ₹2,000 / day</option>
                       <option value="2000-3500">₹2,000 – ₹3,500 / day</option>
                       <option value="above-3500">Above ₹3,500 / day</option>
-                    </select>
-                  </div>
-
-                  <div className="relative inline-flex items-center">
-                    {selectedColor === 'All Colours' ? (
-                      <Palette className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 pointer-events-none" />
-                    ) : (
-                      <span
-                        className="w-3 h-3 rounded-full border border-black/15 absolute left-3 pointer-events-none"
-                        style={{ background: getOutfitColorSwatch(selectedColor) }}
-                      />
-                    )}
-                    <select
-                      value={selectedColor}
-                      onChange={(e) => setSelectedColor(e.target.value)}
-                      className="pl-8 pr-4 py-2 rounded-full bg-white border border-[#F8BBD0] text-xs font-medium text-[#4A1525] focus:outline-none focus:border-[#D81B60] cursor-pointer"
-                    >
-                      <option value="All Colours">Colour: All Colours</option>
-                      {LEHENGA_COLOR_OPTIONS.map((opt) => (
-                        <option key={opt.label} value={opt.label}>
-                          {opt.label}
-                        </option>
-                      ))}
                     </select>
                   </div>
 

@@ -96,7 +96,7 @@ function saveOutfits(outfits: LehengaOutfit[]) {
   fs.writeFileSync(CATALOG_FILE, JSON.stringify(outfits, null, 2), 'utf-8');
   try {
     const initialOutfitsFile = path.join(__dirname, 'src', 'data', 'initialOutfits.ts');
-    const tsContent = `import { LehengaOutfit } from '../types';\n\nexport const INITIAL_OUTFITS: LehengaOutfit[] = ${JSON.stringify(outfits, null, 2)};\n`;
+    const tsContent = `import { LehengaOutfit } from '../types';\n\nexport const BUNDLED_CATALOG_UPDATED_AT = ${Date.now()};\n\nexport const INITIAL_OUTFITS: LehengaOutfit[] = ${JSON.stringify(outfits, null, 2)};\n`;
     fs.writeFileSync(initialOutfitsFile, tsContent, 'utf-8');
   } catch (err) {
     console.error('Error syncing initialOutfits.ts:', err);
@@ -279,6 +279,21 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json({ limit: '100mb' }));
+  app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.path.startsWith('/api/')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  });
   app.use(
     '/uploads',
     express.static(UPLOADS_DIR, {

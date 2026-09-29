@@ -93,16 +93,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           />
         )}
 
-        {/* Subtle Top Row: Colour Swatch Pill & Floating Wishlist/Share */}
-        <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between z-10">
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0]/80 text-[10px] uppercase tracking-wider text-[#4A1525] font-semibold shadow-2xs">
-            <span
-              className="w-2.5 h-2.5 rounded-full border border-black/10 shrink-0"
-              style={{ background: getOutfitColorSwatch(outfit.color || outfit.code) }}
-            />
-            <span>{resolveOutfitColor(outfit.color || outfit.code)}</span>
-          </span>
-
+        {/* Subtle Top Row: Floating Wishlist */}
+        <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-start z-10">
           <div className="flex items-center gap-1.5">
             <button
               type="button"
@@ -118,17 +110,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({
                   isWishlisted ? 'fill-[#D81B60] text-[#D81B60]' : 'text-[#4A1525]/70'
                 }`}
               />
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onShare(outfit);
-              }}
-              aria-label="Share Outfit"
-              className="w-8 h-8 rounded-full bg-white/95 backdrop-blur-md border border-[#F8BBD0]/60 flex items-center justify-center text-[#4A1525]/70 hover:text-[#D81B60] hover:bg-[#FFF0F5] transition-colors shadow-xs cursor-pointer"
-            >
-              <Share2 className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
