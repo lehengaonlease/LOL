@@ -238,8 +238,8 @@ async function uploadViaChunkedServerApi(
   if (!finalizeRes.ok) {
     return null;
   }
-  const json = (await finalizeRes.json()) as { ok?: boolean; url?: string };
-  return json.url || null;
+  const json = (await finalizeRes.json()) as { ok?: boolean; url?: string; dataUrl?: string };
+  return json.dataUrl || json.url || null;
 }
 
 /**
@@ -325,6 +325,11 @@ export async function uploadMediaToCloud(file: File, prefix = 'media'): Promise<
       dataUrl = await readBlobAsDataUrl(file);
     }
 
+    // For images, return the compressed WebP dataUrl directly so it is stored permanently inside catalog.json & initialOutfits.ts
+    if (isImage && dataUrl.startsWith('data:image/') && dataUrl.length <= 800_000) {
+      return dataUrl;
+    }
+
     // 1. Save directly to backend /api/upload-media first (immediate server sync, 0 Firestore write units)
     try {
       if (dataUrl.length <= 2_500_000) {
@@ -334,9 +339,9 @@ export async function uploadMediaToCloud(file: File, prefix = 'media'): Promise<
           body: JSON.stringify({ dataUrl, prefix }),
         });
         if (resp.ok) {
-          const json = (await resp.json()) as { ok?: boolean; url?: string };
-          if (json.url) {
-            return json.url;
+          const json = (await resp.json()) as { ok?: boolean; url?: string; dataUrl?: string };
+          if (json.dataUrl || json.url) {
+            return (json.dataUrl || json.url)!;
           }
         }
       } else {
@@ -532,15 +537,21 @@ export async function saveOutfitToCloud(
   try {
     if (Array.isArray(fullOutfitsList)) {
       lastEmittedOutfitsJson = JSON.stringify(fullOutfitsList);
-      try {
-        await fetch('/api/outfits/sync', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ outfits: fullOutfitsList }),
-        });
-      } catch {
-        // ignore if static deployment
+    }
+    try {
+      const resp = await fetch(`/api/outfits/${encodeURIComponent(outfit.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ outfit }),
+      });
+      if (resp.ok) {
+        const updatedList = (await resp.json()) as LehengaOutfit[];
+        if (Array.isArray(updatedList)) {
+          lastEmittedOutfitsJson = JSON.stringify(updatedList);
+        }
       }
+    } catch {
+      // ignore if static deployment
     }
   } finally {
     activeMutationsCount = Math.max(0, activeMutationsCount - 1);

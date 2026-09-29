@@ -27,6 +27,7 @@ const CATALOG_FILE = path.join(DATA_DIR, 'catalog.json');
 const BOOKINGS_FILE = path.join(DATA_DIR, 'bookings.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'site-settings.json');
 const TESTIMONIALS_FILE = path.join(DATA_DIR, 'testimonials.json');
+const MEDIA_STORE_FILE = path.join(DATA_DIR, 'media-store.json');
 
 // Ensure directories exist
 if (!fs.existsSync(DATA_DIR)) {
@@ -35,6 +36,48 @@ if (!fs.existsSync(DATA_DIR)) {
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
+
+function loadMediaStore(): Record<string, string> {
+  try {
+    if (fs.existsSync(MEDIA_STORE_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(MEDIA_STORE_FILE, 'utf-8'));
+      if (parsed && typeof parsed === 'object') {
+        return parsed as Record<string, string>;
+      }
+    }
+  } catch (err) {
+    console.error('Error reading media-store.json:', err);
+  }
+  return {};
+}
+
+function saveToMediaStore(filename: string, buf: Buffer) {
+  try {
+    // Only persist files <= 6MB in media-store.json so workspace snapshots stay fast
+    if (buf.length > 6_500_000) return;
+    const store = loadMediaStore();
+    store[filename] = buf.toString('base64');
+    fs.writeFileSync(MEDIA_STORE_FILE, JSON.stringify(store), 'utf-8');
+  } catch (err) {
+    console.error('Error writing media-store.json:', err);
+  }
+}
+
+function restoreMissingUploadsFromMediaStore() {
+  try {
+    const store = loadMediaStore();
+    for (const [filename, b64] of Object.entries(store)) {
+      const targetPath = path.join(UPLOADS_DIR, filename);
+      if (!fs.existsSync(targetPath) && typeof b64 === 'string' && b64.length > 0) {
+        fs.writeFileSync(targetPath, Buffer.from(b64, 'base64'));
+      }
+    }
+  } catch (err) {
+    console.error('Error restoring uploads from media-store.json:', err);
+  }
+}
+
+restoreMissingUploadsFromMediaStore();
 
 function loadSiteSettings(): SiteSettings {
   try {
@@ -100,6 +143,38 @@ function saveOutfits(outfits: LehengaOutfit[]) {
     fs.writeFileSync(initialOutfitsFile, tsContent, 'utf-8');
   } catch (err) {
     console.error('Error syncing initialOutfits.ts:', err);
+  }
+  // Prune unreferenced lehenga-* uploads from media-store.json and public/uploads
+  try {
+    const referenced = new Set<string>();
+    for (const o of outfits) {
+      if (o.mediaUrl && o.mediaUrl.startsWith('/uploads/')) {
+        referenced.add(o.mediaUrl.replace('/uploads/', ''));
+      }
+      if (o.videoUrl && o.videoUrl.startsWith('/uploads/')) {
+        referenced.add(o.videoUrl.replace('/uploads/', ''));
+      }
+      if (Array.isArray(o.images)) {
+        for (const img of o.images) {
+          if (typeof img === 'string' && img.startsWith('/uploads/')) {
+            referenced.add(img.replace('/uploads/', ''));
+          }
+        }
+      }
+    }
+    const store = loadMediaStore();
+    let storeModified = false;
+    for (const key of Object.keys(store)) {
+      if (key.startsWith('lehenga-') && !referenced.has(key)) {
+        delete store[key];
+        storeModified = true;
+      }
+    }
+    if (storeModified) {
+      fs.writeFileSync(MEDIA_STORE_FILE, JSON.stringify(store), 'utf-8');
+    }
+  } catch {
+    // ignore cleanup errors
   }
 }
 
@@ -177,6 +252,7 @@ function saveBase64MediaToPublic(dataUrl: string, prefix = 'outfit'): string {
 async function ensureBrowserCompatibleVideo(filePath: string): Promise<void> {
   if (!filePath.endsWith('.mp4') && !filePath.endsWith('.mov')) return;
   try {
+    const stat = fs.statSync(filePath);
     const { stdout } = await execFileAsync('ffprobe', [
       '-v',
       'error',
@@ -190,7 +266,7 @@ async function ensureBrowserCompatibleVideo(filePath: string): Promise<void> {
     ]);
     const isH264 = stdout.includes('codec_name=h264');
     const isYuv420p = stdout.includes('pix_fmt=yuv420p') && !stdout.includes('yuv420p10');
-    if (isH264 && isYuv420p) return;
+    if (isH264 && isYuv420p && stat.size <= 4_500_000) return;
 
     const tempOut = `${filePath}.h264.mp4`;
     await execFileAsync('ffmpeg', [
@@ -198,7 +274,7 @@ async function ensureBrowserCompatibleVideo(filePath: string): Promise<void> {
       '-i',
       filePath,
       '-vf',
-      'scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p',
+      "scale='min(720,iw)':-2,format=yuv420p",
       '-c:v',
       'libx264',
       '-profile:v',
@@ -208,7 +284,7 @@ async function ensureBrowserCompatibleVideo(filePath: string): Promise<void> {
       '-preset',
       'veryfast',
       '-crf',
-      '24',
+      '28',
       '-movflags',
       '+faststart',
       '-c:a',
@@ -296,6 +372,21 @@ async function startServer() {
   });
   app.use(
     '/uploads',
+    (req, _res, next) => {
+      const requestedFile = path.basename(req.path);
+      const diskPath = path.join(UPLOADS_DIR, requestedFile);
+      if (requestedFile && !fs.existsSync(diskPath)) {
+        const store = loadMediaStore();
+        if (store[requestedFile]) {
+          try {
+            fs.writeFileSync(diskPath, Buffer.from(store[requestedFile], 'base64'));
+          } catch {
+            // ignore
+          }
+        }
+      }
+      next();
+    },
     express.static(UPLOADS_DIR, {
       setHeaders: (res, filePath) => {
         if (filePath.endsWith('.mp4') || filePath.endsWith('.webm')) {
@@ -363,10 +454,40 @@ async function startServer() {
         }
       }
       const savedUrl = saveBase64MediaToPublic(finalDataUrl, prefix || 'media');
+      const savedDiskPath = path.join(__dirname, 'public', savedUrl.replace(/^\/+/, ''));
+      const savedFilename = path.basename(savedDiskPath);
       if (savedUrl.endsWith('.mp4') || savedUrl.endsWith('.mov')) {
-        await ensureBrowserCompatibleVideo(path.join(__dirname, 'public', savedUrl.replace(/^\/+/, '')));
+        await ensureBrowserCompatibleVideo(savedDiskPath);
+        if (fs.existsSync(savedDiskPath)) {
+          saveToMediaStore(savedFilename, fs.readFileSync(savedDiskPath));
+        }
+        res.json({ ok: true, url: savedUrl });
+        return;
       }
-      res.json({ ok: true, url: savedUrl });
+      // For images, compress to crisp WebP and return inline dataUrl so it never breaks on container restart
+      try {
+        const webpPath = `${savedDiskPath}.webp`;
+        await execFileAsync('ffmpeg', [
+          '-y',
+          '-i',
+          savedDiskPath,
+          '-vf',
+          "scale='min(1000,iw)':-2",
+          '-q:v',
+          '76',
+          webpPath,
+        ]);
+        if (fs.existsSync(webpPath)) {
+          const webpBuf = fs.readFileSync(webpPath);
+          fs.unlinkSync(webpPath);
+          const webpDataUrl = `data:image/webp;base64,${webpBuf.toString('base64')}`;
+          res.json({ ok: true, url: webpDataUrl, dataUrl: webpDataUrl });
+          return;
+        }
+      } catch {
+        // fallback
+      }
+      res.json({ ok: true, url: finalDataUrl, dataUrl: finalDataUrl });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Upload failed' });
     }
@@ -462,8 +583,43 @@ async function startServer() {
       fs.writeFileSync(finalPath, rawBuf);
       if (ext === 'mp4') {
         await ensureBrowserCompatibleVideo(finalPath);
+        if (fs.existsSync(finalPath)) {
+          saveToMediaStore(finalName, fs.readFileSync(finalPath));
+        }
+        res.json({ ok: true, url: `/uploads/${finalName}` });
+        return;
       }
 
+      // For images (including converted HEIC), convert to compact WebP and return permanent dataUrl
+      try {
+        const webpPath = `${finalPath}.webp`;
+        await execFileAsync('ffmpeg', [
+          '-y',
+          '-i',
+          finalPath,
+          '-vf',
+          "scale='min(1000,iw)':-2",
+          '-q:v',
+          '76',
+          webpPath,
+        ]);
+        if (fs.existsSync(webpPath)) {
+          const webpBuf = fs.readFileSync(webpPath);
+          try {
+            fs.unlinkSync(webpPath);
+            fs.unlinkSync(finalPath);
+          } catch {
+            // ignore
+          }
+          const webpDataUrl = `data:image/webp;base64,${webpBuf.toString('base64')}`;
+          res.json({ ok: true, url: webpDataUrl, dataUrl: webpDataUrl });
+          return;
+        }
+      } catch {
+        // fallback
+      }
+
+      saveToMediaStore(finalName, rawBuf);
       res.json({ ok: true, url: `/uploads/${finalName}` });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Finalize failed' });
@@ -530,6 +686,25 @@ async function startServer() {
     }
     saveOutfits(outfits);
     res.json(outfits);
+  });
+
+  // API: Update or insert a single outfit by ID without overwriting concurrent updates to other outfits
+  app.put('/api/outfits/:id', (req, res) => {
+    const targetId = req.params.id;
+    const incoming = req.body?.outfit as LehengaOutfit | undefined;
+    if (!incoming || !targetId) {
+      res.status(400).json({ error: 'Missing outfit payload' });
+      return;
+    }
+    const current = loadOutfits();
+    const idx = current.findIndex((o) => o.id === targetId);
+    if (idx >= 0) {
+      current[idx] = incoming;
+    } else {
+      current.unshift(incoming);
+    }
+    saveOutfits(current);
+    res.json(current);
   });
 
   // API: Get & Create Customer Testimonials (Indore Client Reviews + 1 Photo)

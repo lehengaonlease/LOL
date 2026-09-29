@@ -721,10 +721,13 @@ export function App() {
               }
             }}
             onUpdateOutfit={async (updatedOutfit) => {
-              const nextOutfits = outfits.map((o) =>
-                o.id === updatedOutfit.id ? updatedOutfit : o
-              );
-              setOutfits(nextOutfits);
+              let nextOutfits: LehengaOutfit[] = [];
+              setOutfits((prev) => {
+                nextOutfits = prev.map((o) =>
+                  o.id === updatedOutfit.id ? updatedOutfit : o
+                );
+                return nextOutfits;
+              });
               broadcastCatalogUpdate(nextOutfits);
               try {
                 await saveOutfitToCloud(
