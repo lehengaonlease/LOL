@@ -6,8 +6,23 @@ import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import heicConvert from 'heic-convert';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import {
+  getFirestore,
+  collection,
+  doc,
+  setDoc,
+  getDoc,
+  getDocs,
+  query,
+  orderBy,
+} from 'firebase/firestore';
+import firebaseConfig from './firebase-applet-config.json' with { type: 'json' };
 
 const execFileAsync = promisify(execFile);
+const serverFirebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const serverDb = getFirestore(serverFirebaseApp, firebaseConfig.firestoreDatabaseId);
+const FIRESTORE_WRITE_TOKEN = 'lol-sanjeevani-studio-sync-v1';
 import { INITIAL_OUTFITS } from './src/data/initialOutfits.ts';
 import { INITIAL_TESTIMONIALS } from './src/data/initialTestimonials.ts';
 import { DEFAULT_SITE_SETTINGS } from './src/types.ts';
@@ -51,8 +66,77 @@ function loadMediaStore(): Record<string, string> {
   return {};
 }
 
+async function saveBufferToFirestoreMedia(filename: string, buf: Buffer, mimeType?: string): Promise<void> {
+  try {
+    const safeId = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const resolvedMime =
+      mimeType ||
+      (safeId.endsWith('.mp4')
+        ? 'video/mp4'
+        : safeId.endsWith('.webm')
+        ? 'video/webm'
+        : safeId.endsWith('.png')
+        ? 'image/png'
+        : 'image/webp');
+    const CHUNK_SIZE = 550 * 1024; // 550KB binary -> ~733KB base64 (under 900KB rule limit)
+    const totalChunks = Math.max(1, Math.ceil(buf.length / CHUNK_SIZE));
+    for (let idx = 0; idx < totalChunks; idx++) {
+      const slice = buf.subarray(idx * CHUNK_SIZE, Math.min(buf.length, (idx + 1) * CHUNK_SIZE));
+      await setDoc(doc(serverDb, 'media_assets', safeId, 'chunks', String(idx).padStart(5, '0')), {
+        index: idx,
+        data: slice.toString('base64'),
+        writeToken: FIRESTORE_WRITE_TOKEN,
+      });
+    }
+    await setDoc(doc(serverDb, 'media_assets', safeId), {
+      mimeType: resolvedMime,
+      totalChunks,
+      createdAt: Date.now(),
+      writeToken: FIRESTORE_WRITE_TOKEN,
+    });
+  } catch (err) {
+    console.warn('Firestore media backup skipped for', filename, err instanceof Error ? err.message : err);
+  }
+}
+
+const inflightFirestoreDownloads = new Map<string, Promise<Buffer | null>>();
+
+async function loadBufferFromFirestoreMedia(filename: string): Promise<Buffer | null> {
+  const safeId = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const existing = inflightFirestoreDownloads.get(safeId);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    try {
+      const metaSnap = await getDoc(doc(serverDb, 'media_assets', safeId));
+      if (!metaSnap.exists()) return null;
+      const chunksSnap = await getDocs(
+        query(collection(serverDb, 'media_assets', safeId, 'chunks'), orderBy('index', 'asc'))
+      );
+      if (chunksSnap.empty) return null;
+      const parts: Buffer[] = [];
+      chunksSnap.forEach((d) => {
+        const b64 = d.data().data;
+        if (typeof b64 === 'string' && b64.length > 0) {
+          parts.push(Buffer.from(b64, 'base64'));
+        }
+      });
+      return parts.length > 0 ? Buffer.concat(parts) : null;
+    } catch {
+      return null;
+    } finally {
+      inflightFirestoreDownloads.delete(safeId);
+    }
+  })();
+
+  inflightFirestoreDownloads.set(safeId, promise);
+  return promise;
+}
+
 function saveToMediaStore(filename: string, buf: Buffer) {
   try {
+    // Persist in Firestore media_assets so ais-dev and ais-pre share all uploaded photos & videos
+    void saveBufferToFirestoreMedia(filename, buf);
     // Only persist files <= 6MB in media-store.json so workspace snapshots stay fast
     if (buf.length > 6_500_000) return;
     const store = loadMediaStore();
@@ -283,14 +367,20 @@ async function ensureBrowserCompatibleVideo(filePath: string): Promise<void> {
       'yuv420p',
       '-preset',
       'veryfast',
+      '-threads',
+      '0',
       '-crf',
-      '28',
+      '30',
+      '-maxrate',
+      '1200k',
+      '-bufsize',
+      '2400k',
       '-movflags',
       '+faststart',
       '-c:a',
       'aac',
       '-b:a',
-      '128k',
+      '96k',
       tempOut,
     ]);
     if (fs.existsSync(tempOut) && fs.statSync(tempOut).size > 1000) {
@@ -372,7 +462,7 @@ async function startServer() {
   });
   app.use(
     '/uploads',
-    (req, _res, next) => {
+    async (req, _res, next) => {
       const requestedFile = path.basename(req.path);
       const diskPath = path.join(UPLOADS_DIR, requestedFile);
       if (requestedFile && !fs.existsSync(diskPath)) {
@@ -382,6 +472,15 @@ async function startServer() {
             fs.writeFileSync(diskPath, Buffer.from(store[requestedFile], 'base64'));
           } catch {
             // ignore
+          }
+        } else {
+          const cloudBuf = await loadBufferFromFirestoreMedia(requestedFile);
+          if (cloudBuf && cloudBuf.length > 0) {
+            try {
+              fs.writeFileSync(diskPath, cloudBuf);
+            } catch {
+              // ignore
+            }
           }
         }
       }
@@ -394,7 +493,10 @@ async function startServer() {
           res.setHeader('Accept-Ranges', 'bytes');
         }
       },
-    })
+    }),
+    (_req, res) => {
+      res.status(404).end();
+    }
   );
   app.use('/images', express.static(path.join(__dirname, 'public', 'images')));
 
@@ -464,30 +566,39 @@ async function startServer() {
         res.json({ ok: true, url: savedUrl });
         return;
       }
-      // For images, compress to crisp WebP and return inline dataUrl so it never breaks on container restart
+      // For images, compress to crisp WebP file on disk, back up in media-store.json, and return clean /uploads/... URL
       try {
-        const webpPath = `${savedDiskPath}.webp`;
+        const webpFilename = savedFilename.replace(/\.[^.]+$/, '') + '.webp';
+        const webpPath = path.join(UPLOADS_DIR, webpFilename);
         await execFileAsync('ffmpeg', [
           '-y',
           '-i',
           savedDiskPath,
           '-vf',
-          "scale='min(1000,iw)':-2",
+          "scale='min(1200,iw)':-2",
           '-q:v',
-          '76',
+          '80',
           webpPath,
         ]);
         if (fs.existsSync(webpPath)) {
-          const webpBuf = fs.readFileSync(webpPath);
-          fs.unlinkSync(webpPath);
-          const webpDataUrl = `data:image/webp;base64,${webpBuf.toString('base64')}`;
-          res.json({ ok: true, url: webpDataUrl, dataUrl: webpDataUrl });
+          if (webpPath !== savedDiskPath && fs.existsSync(savedDiskPath)) {
+            try {
+              fs.unlinkSync(savedDiskPath);
+            } catch {
+              // ignore
+            }
+          }
+          saveToMediaStore(webpFilename, fs.readFileSync(webpPath));
+          res.json({ ok: true, url: `/uploads/${webpFilename}` });
           return;
         }
       } catch {
         // fallback
       }
-      res.json({ ok: true, url: finalDataUrl, dataUrl: finalDataUrl });
+      if (fs.existsSync(savedDiskPath)) {
+        saveToMediaStore(savedFilename, fs.readFileSync(savedDiskPath));
+      }
+      res.json({ ok: true, url: savedUrl });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Upload failed' });
     }
@@ -590,29 +701,30 @@ async function startServer() {
         return;
       }
 
-      // For images (including converted HEIC), convert to compact WebP and return permanent dataUrl
+      // For images (including converted HEIC), convert to compact WebP file on disk and return clean /uploads/... URL
       try {
-        const webpPath = `${finalPath}.webp`;
+        const webpName = finalName.replace(/\.[^.]+$/, '') + '.webp';
+        const webpPath = path.join(UPLOADS_DIR, webpName);
         await execFileAsync('ffmpeg', [
           '-y',
           '-i',
           finalPath,
           '-vf',
-          "scale='min(1000,iw)':-2",
+          "scale='min(1200,iw)':-2",
           '-q:v',
-          '76',
+          '80',
           webpPath,
         ]);
         if (fs.existsSync(webpPath)) {
-          const webpBuf = fs.readFileSync(webpPath);
-          try {
-            fs.unlinkSync(webpPath);
-            fs.unlinkSync(finalPath);
-          } catch {
-            // ignore
+          if (webpPath !== finalPath && fs.existsSync(finalPath)) {
+            try {
+              fs.unlinkSync(finalPath);
+            } catch {
+              // ignore
+            }
           }
-          const webpDataUrl = `data:image/webp;base64,${webpBuf.toString('base64')}`;
-          res.json({ ok: true, url: webpDataUrl, dataUrl: webpDataUrl });
+          saveToMediaStore(webpName, fs.readFileSync(webpPath));
+          res.json({ ok: true, url: `/uploads/${webpName}` });
           return;
         }
       } catch {
@@ -625,6 +737,217 @@ async function startServer() {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Finalize failed' });
     }
   });
+
+  // API: Raw Binary Chunk Upload (Zero Base64, supports 200MB+ videos without hitting Cloud Run 32MB proxy limit)
+  app.post(
+    '/api/upload-binary-chunk',
+    express.raw({ type: '*/*', limit: '20mb' }),
+    (req, res) => {
+      try {
+        const uploadId = String(req.headers['x-upload-id'] || '').replace(/[^a-zA-Z0-9_-]/g, '');
+        const chunkIndex = Number(req.headers['x-chunk-index'] || '0');
+        const rawBuf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || []);
+        if (!uploadId || rawBuf.length === 0) {
+          res.status(400).json({ error: 'Missing uploadId or binary chunk' });
+          return;
+        }
+        const tempPath = path.join(UPLOADS_DIR, `.tmp-${uploadId}.part`);
+        if (chunkIndex === 0 && fs.existsSync(tempPath)) {
+          fs.unlinkSync(tempPath);
+        }
+        fs.appendFileSync(tempPath, rawBuf);
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(500).json({ error: err instanceof Error ? err.message : 'Binary chunk failed' });
+      }
+    }
+  );
+
+  app.post('/api/upload-binary-finalize', async (req, res) => {
+    try {
+      const { uploadId, prefix, mimeType, fileName } = req.body;
+      const safeId = String(uploadId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+      const tempPath = path.join(UPLOADS_DIR, `.tmp-${safeId}.part`);
+      if (!safeId || !fs.existsSync(tempPath)) {
+        res.status(404).json({ error: 'Upload temp file not found' });
+        return;
+      }
+
+      const rawPrefix = String(prefix || 'lehengas').replace(/[^a-zA-Z0-9_-]/g, '');
+      const cleanOriginal = String(fileName || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const mime = String(mimeType || '').toLowerCase();
+      const lowerName = cleanOriginal.toLowerCase();
+
+      const fd = fs.openSync(tempPath, 'r');
+      const headerBuf = Buffer.alloc(16);
+      fs.readSync(fd, headerBuf, 0, 16, 0);
+      fs.closeSync(fd);
+      const header = headerBuf.subarray(4, 12).toString('ascii');
+
+      const isHeic =
+        mime.includes('heic') ||
+        mime.includes('heif') ||
+        lowerName.endsWith('.heic') ||
+        lowerName.endsWith('.heif') ||
+        header.includes('ftypheic') ||
+        header.includes('ftypmif1') ||
+        header.includes('ftypheix');
+
+      const isVideo =
+        !isHeic &&
+        (mime.startsWith('video/') ||
+          mime.includes('mp4') ||
+          mime.includes('quicktime') ||
+          /\.(mp4|mov|webm|m4v)$/i.test(lowerName));
+
+      const ext = isVideo ? 'mp4' : 'webp';
+      const baseStem = cleanOriginal.replace(/\.[^.]+$/, '').slice(0, 32) || 'media';
+      const finalName = `${rawPrefix}-${Date.now()}_${baseStem}.${ext}`;
+      const finalPath = path.join(UPLOADS_DIR, finalName);
+
+      if (isVideo) {
+        fs.renameSync(tempPath, finalPath);
+        await ensureBrowserCompatibleVideo(finalPath);
+        if (fs.existsSync(finalPath)) {
+          const finalBuf = fs.readFileSync(finalPath);
+          saveToMediaStore(finalName, finalBuf);
+          await saveBufferToFirestoreMedia(finalName, finalBuf, 'video/mp4');
+        }
+        res.json({ ok: true, url: `/uploads/${finalName}` });
+        return;
+      }
+
+      if (isHeic) {
+        const heicBuf = fs.readFileSync(tempPath);
+        try {
+          fs.unlinkSync(tempPath);
+        } catch {
+          // ignore
+        }
+        const jpegBuf = await heicConvert({
+          buffer: heicBuf,
+          format: 'JPEG',
+          quality: 0.9,
+        });
+        fs.writeFileSync(tempPath, Buffer.from(jpegBuf));
+      }
+
+      try {
+        await execFileAsync('ffmpeg', [
+          '-y',
+          '-i',
+          tempPath,
+          '-vf',
+          "scale='min(1200,iw)':-2",
+          '-q:v',
+          '82',
+          finalPath,
+        ]);
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      } catch {
+        fs.renameSync(tempPath, finalPath);
+      }
+
+      if (fs.existsSync(finalPath)) {
+        const finalBuf = fs.readFileSync(finalPath);
+        saveToMediaStore(finalName, finalBuf);
+        await saveBufferToFirestoreMedia(finalName, finalBuf, 'image/webp');
+      }
+      res.json({ ok: true, url: `/uploads/${finalName}` });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Binary finalize failed' });
+    }
+  });
+
+  // API: Direct Raw Binary Stream Upload (Zero FileReader / Base64 overhead)
+  app.post(
+    '/api/upload-binary',
+    express.raw({ type: '*/*', limit: '250mb' }),
+    async (req, res) => {
+      try {
+        let rawBuf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || []);
+        if (!rawBuf || rawBuf.length === 0) {
+          res.status(400).json({ error: 'Empty binary body' });
+          return;
+        }
+        const rawPrefix = String(req.headers['x-prefix'] || 'lehengas').replace(
+          /[^a-zA-Z0-9_-]/g,
+          ''
+        );
+        const rawFileName = decodeURIComponent(String(req.headers['x-file-name'] || 'file'));
+        const cleanOriginal = rawFileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const mime = String(req.headers['content-type'] || '').toLowerCase();
+        const lowerName = cleanOriginal.toLowerCase();
+        const header = rawBuf.subarray(4, 12).toString('ascii');
+
+        const isHeic =
+          mime.includes('heic') ||
+          mime.includes('heif') ||
+          lowerName.endsWith('.heic') ||
+          lowerName.endsWith('.heif') ||
+          header.includes('ftypheic') ||
+          header.includes('ftypmif1') ||
+          header.includes('ftypheix');
+
+        const isVideo =
+          !isHeic &&
+          (mime.startsWith('video/') ||
+            mime.includes('mp4') ||
+            mime.includes('quicktime') ||
+            /\.(mp4|mov|webm|m4v)$/i.test(lowerName));
+
+        if (isHeic) {
+          const jpegBuf = await heicConvert({
+            buffer: rawBuf,
+            format: 'JPEG',
+            quality: 0.9,
+          });
+          rawBuf = Buffer.from(jpegBuf);
+        }
+
+        const ext = isVideo ? 'mp4' : 'webp';
+        const baseStem = cleanOriginal.replace(/\.[^.]+$/, '').slice(0, 32) || 'media';
+        const finalName = `${rawPrefix}-${Date.now()}_${baseStem}.${ext}`;
+        const finalPath = path.join(UPLOADS_DIR, finalName);
+
+        if (isVideo) {
+          fs.writeFileSync(finalPath, rawBuf);
+          await ensureBrowserCompatibleVideo(finalPath);
+          if (fs.existsSync(finalPath)) {
+            saveToMediaStore(finalName, fs.readFileSync(finalPath));
+          }
+          res.json({ ok: true, url: `/uploads/${finalName}` });
+          return;
+        }
+
+        // Image: write temp, convert to WebP via ffmpeg, save to UPLOADS_DIR + media-store.json
+        const tempImgPath = `${finalPath}.tmp`;
+        fs.writeFileSync(tempImgPath, rawBuf);
+        try {
+          await execFileAsync('ffmpeg', [
+            '-y',
+            '-i',
+            tempImgPath,
+            '-vf',
+            "scale='min(1200,iw)':-2",
+            '-q:v',
+            '82',
+            finalPath,
+          ]);
+          if (fs.existsSync(tempImgPath)) fs.unlinkSync(tempImgPath);
+        } catch {
+          fs.renameSync(tempImgPath, finalPath);
+        }
+
+        if (fs.existsSync(finalPath)) {
+          saveToMediaStore(finalName, fs.readFileSync(finalPath));
+        }
+        res.json({ ok: true, url: `/uploads/${finalName}` });
+      } catch (err) {
+        res.status(500).json({ error: err instanceof Error ? err.message : 'Binary upload failed' });
+      }
+    }
+  );
 
   // API: Get & Update Site Settings (Top Logo, Bottom Logo, Hero Banner Video/Image, Brand Text)
   app.get('/api/settings', (_req, res) => {

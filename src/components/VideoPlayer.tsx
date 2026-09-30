@@ -68,6 +68,13 @@ export function resolvePublicVideoPath(rawSrc: string): string {
     return '/hero-poster.jpg';
   }
 
+  // Strip container-specific .run.app origin from /uploads/... so ais-dev and ais-pre share URLs
+  const runAppUploadsMatch = trimmed.match(/^https?:\/\/[^/]+\.run\.app(\/uploads\/.+)$/i);
+  if (runAppUploadsMatch) {
+    const cleanUploadPath = runAppUploadsMatch[1].split('?')[0];
+    return `${cleanUploadPath}?v=h264`;
+  }
+
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     return trimmed;
   }
@@ -94,10 +101,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const initial = resolvePublicVideoPath(src);
     return initial.startsWith('cloud-media://') ? '' : initial;
   });
+  const [hasTriedCloudFallback, setHasTriedCloudFallback] = useState(false);
   const resolvedPoster = poster ? resolvePublicVideoPath(poster) : undefined;
 
   useEffect(() => {
     let active = true;
+    setHasTriedCloudFallback(false);
     const resolved = resolvePublicVideoPath(src);
     if (resolved.startsWith('cloud-media://')) {
       resolveCloudMediaUrl(resolved).then((blobUrl) => {
@@ -204,6 +213,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (v.paused) {
           v.muted = true;
           v.play().catch(() => {});
+        }
+      }}
+      onError={() => {
+        if (hasTriedCloudFallback) return;
+        setHasTriedCloudFallback(true);
+        const uploadMatch = currentSrc.match(/\/uploads\/([^?#]+)/);
+        if (uploadMatch && uploadMatch[1]) {
+          const fileName = decodeURIComponent(uploadMatch[1]).replace(/[^a-zA-Z0-9._-]/g, '_');
+          resolveCloudMediaUrl(`cloud-media://${fileName}`).then((blobUrl) => {
+            if (blobUrl && !blobUrl.startsWith('cloud-media://')) {
+              setCurrentSrc(blobUrl);
+            }
+          });
         }
       }}
       className={className}

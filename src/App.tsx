@@ -64,7 +64,7 @@ import {
   toggleTaskStatus,
 } from './services/googleTasksService';
 
-const STORAGE_KEY_OUTFITS = 'lol_indore_outfits_v5';
+const STORAGE_KEY_OUTFITS = 'lol_indore_outfits_v6';
 const STORAGE_KEY_TASKS = 'lol_indore_tasks_v2';
 const STORAGE_KEY_WISHLIST = 'lol_indore_wishlist_v2';
 const STORAGE_KEY_SITE_SETTINGS = 'lol_indore_site_settings_v4';
@@ -225,6 +225,7 @@ export function App() {
   };
 
   const handleOpenOutfitPage = (outfit: LehengaOutfit) => {
+    if (outfit.available === false) return;
     setActiveViewState('catalog');
     setInspectOutfit(outfit);
     try {

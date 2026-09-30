@@ -92,9 +92,15 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
       list.push({ type: 'video', url: resolvePublicVideoPath(vid), label: 'Twirl Video' });
     }
 
+    const rawImgs =
+      Array.isArray(outfit.mediaUrls) && outfit.mediaUrls.length > 0
+        ? outfit.mediaUrls
+        : Array.isArray(outfit.images) && outfit.images.length > 0
+        ? outfit.images
+        : [];
     const imgs =
-      Array.isArray(outfit.images) && outfit.images.length > 0
-        ? outfit.images.filter(Boolean).slice(0, 4)
+      rawImgs.length > 0
+        ? rawImgs.filter(Boolean).slice(0, 4)
         : outfit.mediaType === 'image' && outfit.mediaUrl
         ? [outfit.mediaUrl]
         : [];
@@ -484,27 +490,37 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
                 <span>Share</span>
               </button>
 
-              <button
-                type="button"
-                onClick={() =>
-                  onRent(
-                    appliedCoupon
-                      ? {
-                          ...outfit,
-                          pricePerDay: effectivePricePerDay,
-                        }
-                      : outfit
-                  )
-                }
-                className="flex-1 py-4 px-6 rounded-2xl bg-[#4A1525] text-white text-xs uppercase tracking-[0.16em] font-semibold hover:bg-[#D81B60] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer shadow-sm"
-              >
-                <Sparkles className="w-4 h-4" />
-                <span>
-                  {appliedCoupon
-                    ? `Reserve at ₹${effectivePricePerDay.toLocaleString('en-IN')}/day`
-                    : 'Reserve This Lehenga'}
-                </span>
-              </button>
+              {outfit.available !== false ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onRent(
+                      appliedCoupon
+                        ? {
+                            ...outfit,
+                            pricePerDay: effectivePricePerDay,
+                          }
+                        : outfit
+                    )
+                  }
+                  className="flex-1 py-4 px-6 rounded-2xl bg-[#4A1525] text-white text-xs uppercase tracking-[0.16em] font-semibold hover:bg-[#D81B60] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>
+                    {appliedCoupon
+                      ? `Reserve at ₹${effectivePricePerDay.toLocaleString('en-IN')}/day`
+                      : 'Reserve This Lehenga'}
+                  </span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  className="flex-1 py-4 px-6 rounded-2xl bg-gray-200 text-gray-500 text-xs uppercase tracking-[0.16em] font-semibold inline-flex items-center justify-center gap-2 cursor-not-allowed"
+                >
+                  <span>Booked — Unavailable</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

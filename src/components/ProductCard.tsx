@@ -34,9 +34,15 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       });
     }
 
+    const rawImgs =
+      Array.isArray(outfit.mediaUrls) && outfit.mediaUrls.length > 0
+        ? outfit.mediaUrls
+        : Array.isArray(outfit.images) && outfit.images.length > 0
+        ? outfit.images
+        : [];
     const imgs =
-      Array.isArray(outfit.images) && outfit.images.length > 0
-        ? outfit.images.map((s) => s.trim()).filter(Boolean).slice(0, 4)
+      rawImgs.length > 0
+        ? rawImgs.map((s) => s.trim()).filter(Boolean).slice(0, 4)
         : outfit.mediaType === 'image' && outfit.mediaUrl
         ? [outfit.mediaUrl]
         : [];
@@ -71,13 +77,24 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   }, [outfit.id, outfit.videoUrl, outfit.mediaUrl]);
 
   const currentMedia = mediaItems[activeMediaIndex] || mediaItems[0];
+  const isAvailable = outfit.available !== false;
 
   return (
-    <article className="image group flex flex-col bg-white rounded-2xl overflow-hidden border border-[#F8BBD0]/60 hover:border-[#F48FB1] transition-all duration-300 hover:shadow-[0_16px_40px_-12px_rgba(216,27,96,0.14)]">
+    <article
+      className={`image group flex flex-col bg-white rounded-2xl overflow-hidden border transition-all duration-300 ${
+        isAvailable
+          ? 'border-[#F8BBD0]/60 hover:border-[#F48FB1] hover:shadow-[0_16px_40px_-12px_rgba(216,27,96,0.14)]'
+          : 'border-gray-200 bg-gray-50/90 grayscale opacity-65 cursor-not-allowed select-none'
+      }`}
+    >
       {/* 3:4 Full-Length Portrait Container */}
       <div
-        onClick={() => onInspect(outfit)}
-        className="relative aspect-[3/4] w-full bg-[#FFF0F5] overflow-hidden cursor-pointer"
+        onClick={() => {
+          if (isAvailable) onInspect(outfit);
+        }}
+        className={`relative aspect-[3/4] w-full bg-[#FFF0F5] overflow-hidden ${
+          isAvailable ? 'cursor-pointer' : 'cursor-not-allowed'
+        }`}
       >
         {currentMedia.type === 'video' ? (
           <VideoPlayer
@@ -89,8 +106,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           <OptimizedImage
             src={currentMedia.url}
             alt={outfit.title}
-            className="w-full h-full object-cover object-top transition-transform duration-700 ease-out group-hover:scale-105"
+            className={`w-full h-full object-cover object-top transition-transform duration-700 ease-out ${
+              isAvailable ? 'group-hover:scale-105' : ''
+            }`}
           />
+        )}
+
+        {!isAvailable && (
+          <div className="absolute inset-0 bg-black/35 flex items-center justify-center z-10 pointer-events-none">
+            <span className="px-4 py-2 rounded-full bg-gray-900/90 text-white text-xs uppercase tracking-[0.2em] font-bold shadow-md border border-white/20">
+              Booked
+            </span>
+          </div>
         )}
 
         {/* Subtle Top Row: Floating Wishlist */}
@@ -115,7 +142,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         </div>
 
         {/* Media Switcher Pill on Hover when multiple photos or video exist */}
-        {mediaItems.length > 1 && (
+        {isAvailable && mediaItems.length > 1 && (
           <div
             onClick={(e) => e.stopPropagation()}
             className="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-1 bg-white/95 backdrop-blur-md border border-[#F8BBD0]/60 rounded-xl p-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 shadow-sm"
@@ -147,24 +174,30 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             <span>{outfit.vibeCategory}</span>
             <span
               className={`font-semibold ${
-                outfit.available !== false ? 'text-emerald-700' : 'text-amber-600'
+                isAvailable ? 'text-emerald-700' : 'text-gray-500'
               }`}
             >
-              {outfit.available !== false ? 'Available' : 'Booked'}
+              {isAvailable ? 'Available' : 'Booked'}
             </span>
           </div>
 
           {/* Title */}
-          <a
-            href={`/outfit/${outfit.id}`}
-            onClick={(e) => {
-              e.preventDefault();
-              onInspect(outfit);
-            }}
-            className="block font-editorial text-2xl font-semibold text-[#4A1525] leading-snug group-hover:text-[#D81B60] transition-colors cursor-pointer line-clamp-1"
-          >
-            {outfit.title}
-          </a>
+          {isAvailable ? (
+            <a
+              href={`/outfit/${outfit.id}`}
+              onClick={(e) => {
+                e.preventDefault();
+                onInspect(outfit);
+              }}
+              className="block font-editorial text-2xl font-semibold text-[#4A1525] leading-snug group-hover:text-[#D81B60] transition-colors cursor-pointer line-clamp-1"
+            >
+              {outfit.title}
+            </a>
+          ) : (
+            <span className="block font-editorial text-2xl font-semibold text-gray-500 leading-snug cursor-not-allowed line-clamp-1">
+              {outfit.title}
+            </span>
+          )}
 
           {/* Short Description */}
           <p className="text-xs text-[#4A1525]/65 line-clamp-2 mt-1.5 leading-relaxed">
@@ -194,22 +227,34 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => onShare(outfit)}
-              className="p-2.5 rounded-xl bg-[#FFF0F5] border border-[#F8BBD0] text-[#4A1525] hover:text-[#D81B60] hover:border-[#D81B60] transition-colors cursor-pointer"
-              title="Share Outfit"
-              aria-label="Share Outfit"
-            >
-              <Share2 className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => onRent(outfit)}
-              className="px-4 py-2.5 rounded-xl bg-[#D81B60] text-white text-xs uppercase tracking-wider font-semibold hover:bg-[#AD1457] transition-colors shadow-xs cursor-pointer"
-            >
-              Rent Now
-            </button>
+            {isAvailable ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onShare(outfit)}
+                  className="p-2.5 rounded-xl bg-[#FFF0F5] border border-[#F8BBD0] text-[#4A1525] hover:text-[#D81B60] hover:border-[#D81B60] transition-colors cursor-pointer"
+                  title="Share Outfit"
+                  aria-label="Share Outfit"
+                >
+                  <Share2 className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRent(outfit)}
+                  className="px-4 py-2.5 rounded-xl bg-[#D81B60] text-white text-xs uppercase tracking-wider font-semibold hover:bg-[#AD1457] transition-colors shadow-xs cursor-pointer"
+                >
+                  Rent Now
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                disabled
+                className="px-4 py-2.5 rounded-xl bg-gray-200 text-gray-500 text-xs uppercase tracking-wider font-semibold cursor-not-allowed"
+              >
+                Booked
+              </button>
+            )}
           </div>
         </div>
       </div>

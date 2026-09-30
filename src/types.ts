@@ -12,6 +12,7 @@ export interface LehengaOutfit {
   ogHumorTagline: string;
   mediaUrl: string;
   mediaType: MediaType;
+  mediaUrls?: string[];
   images?: string[];
   videoUrl?: string;
   galleryUrls?: string[];

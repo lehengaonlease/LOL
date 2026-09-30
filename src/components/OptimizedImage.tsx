@@ -55,6 +55,12 @@ export function resolveOptimizedImagePath(rawSrc?: string, isLogo = false): stri
     return '/hero-poster.jpg';
   }
 
+  // Strip container-specific .run.app origin from /uploads/... so ais-dev and ais-pre share URLs
+  const runAppUploadsMatch = trimmed.match(/^https?:\/\/[^/]+\.run\.app(\/uploads\/.+)$/i);
+  if (runAppUploadsMatch) {
+    return runAppUploadsMatch[1];
+  }
+
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     return trimmed;
   }
@@ -111,6 +117,22 @@ export const OptimizedImage: React.FC<OptimizedImageProps> = ({
   const handleError = () => {
     if (hasTriedFallback) return;
     setHasTriedFallback(true);
+
+    // If an /uploads/<fileName> image failed on this container, resolve directly from Firestore media_assets
+    const uploadMatch = currentSrc.match(/\/uploads\/([^?#]+)/);
+    if (uploadMatch && uploadMatch[1]) {
+      const fileName = decodeURIComponent(uploadMatch[1]).replace(/[^a-zA-Z0-9._-]/g, '_');
+      resolveCloudMediaUrl(`cloud-media://${fileName}`).then((blobUrl) => {
+        if (blobUrl && !blobUrl.startsWith('cloud-media://')) {
+          setCurrentSrc(blobUrl);
+        } else if (fallbackSrc) {
+          setCurrentSrc(resolveOptimizedImagePath(fallbackSrc, isLogo));
+        } else if (isLogo) {
+          setCurrentSrc(BUNDLED_LOGO_DATA_URL);
+        }
+      });
+      return;
+    }
 
     if (fallbackSrc) {
       setCurrentSrc(resolveOptimizedImagePath(fallbackSrc, isLogo));

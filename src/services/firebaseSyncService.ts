@@ -13,6 +13,7 @@ import {
   setLogLevel,
   enableNetwork,
 } from 'firebase/firestore';
+import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { LehengaOutfit, SiteSettings, CustomerTestimonial } from '../types';
 import { BUNDLED_CATALOG_UPDATED_AT } from '../data/initialOutfits';
@@ -32,6 +33,7 @@ const LOCAL_SETTINGS_TIMESTAMP_KEY = 'lol_local_settings_updated_at_v1';
 
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const storage = getStorage(app, firebaseConfig.storageBucket);
 
 enableNetwork(db).catch(() => {});
 
@@ -117,356 +119,244 @@ async function runFirestoreWriteSafely(writeFn: () => Promise<void>): Promise<vo
   }
 }
 
-// In-memory cache for resolved cloud-media:// Blob URLs
+// In-memory cache for resolved legacy cloud-media:// Blob URLs
 const resolvedMediaCache = new Map<string, string>();
 const inflightMediaPromises = new Map<string, Promise<string>>();
 
-/**
- * Compresses an image File in the browser using HTML5 Canvas to crisp WebP
- * so it uploads and syncs across all devices in milliseconds.
- */
-async function compressImageFileToDataUrl(file: File, maxDimension = 1400): Promise<string> {
-  if (file.type === 'image/svg+xml') {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ''));
-      reader.onerror = () => reject(new Error('Failed to read SVG file'));
-      reader.readAsDataURL(file);
-    });
-  }
+export type UploadProgressCallback = (loadedBytes: number, totalBytes: number) => void;
 
-  return new Promise((resolve, reject) => {
-    const objectUrl = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      try {
-        let { width, height } = img;
-        if (width > maxDimension || height > maxDimension) {
-          if (width >= height) {
-            height = Math.round((height * maxDimension) / width);
-            width = maxDimension;
-          } else {
-            width = Math.round((width * maxDimension) / height);
-            height = maxDimension;
-          }
-        }
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          URL.revokeObjectURL(objectUrl);
-          reject(new Error('Canvas context unavailable'));
-          return;
-        }
-        ctx.drawImage(img, 0, 0, width, height);
-        const webpDataUrl = canvas.toDataURL('image/webp', 0.85);
-        URL.revokeObjectURL(objectUrl);
-        resolve(webpDataUrl);
-      } catch (err) {
-        URL.revokeObjectURL(objectUrl);
-        reject(err);
-      }
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(new Error('Failed to decode image'));
-    };
-    img.src = objectUrl;
-  });
+export function formatUploadMB(loadedBytes: number, totalBytes: number): string {
+  const totalMB = Math.max(0.01, totalBytes / (1024 * 1024));
+  const loadedMB = Math.min(totalMB, Math.max(0, loadedBytes / (1024 * 1024)));
+  const pct = totalBytes > 0 ? Math.min(100, Math.round((loadedBytes / totalBytes) * 100)) : 0;
+  return `${loadedMB.toFixed(2)} MB / ${totalMB.toFixed(2)} MB (${pct}%)`;
 }
 
-function readBlobAsDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        resolve(reader.result);
-      } else {
-        reject(new Error('Failed to read file'));
+let isStorageBucketUnavailable = false;
+
+function sendBinaryChunkWithProgress(
+  chunkBlob: Blob,
+  uploadId: string,
+  chunkIndex: number,
+  onChunkProgress?: (chunkLoaded: number) => void
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload-binary-chunk', true);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.setRequestHeader('X-Upload-Id', uploadId);
+    xhr.setRequestHeader('X-Chunk-Index', String(chunkIndex));
+
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && onChunkProgress) {
+        onChunkProgress(ev.loaded);
       }
     };
-    reader.onerror = () => reject(new Error('File read error'));
-    reader.readAsDataURL(blob);
+
+    xhr.onload = () => {
+      resolve(xhr.status >= 200 && xhr.status < 300);
+    };
+    xhr.onerror = () => resolve(false);
+    xhr.ontimeout = () => resolve(false);
+    xhr.send(chunkBlob);
   });
 }
 
 /**
- * Uploads any Blob/File in 1.5MB slices via `/api/upload-chunk` + `/api/upload-finalize`
- * so large videos (.mp4 / .mov / .webm) and high-res photos never fail due to HTTP payload limits.
+ * Streams a raw binary File/Blob in 2MB binary slices via `/api/upload-binary-chunk` + `/api/upload-binary-finalize`
+ * with real-time byte progress (`XMLHttpRequest.upload.onprogress`) and zero Base64 / FileReader overhead.
  */
-async function uploadViaChunkedServerApi(
+async function uploadRawBinaryToServer(
   blob: Blob,
   prefix: string,
   fileName: string,
-  mimeType: string
+  mimeType: string,
+  onProgress?: UploadProgressCallback
 ): Promise<string | null> {
-  const CHUNK_BYTES = 1_500_000; // 1.5MB per request
-  const totalChunks = Math.max(1, Math.ceil(blob.size / CHUNK_BYTES));
-  const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    const totalBytes = Math.max(1, blob.size);
+    onProgress?.(0, totalBytes);
 
-  for (let i = 0; i < totalChunks; i++) {
-    const slice = blob.slice(i * CHUNK_BYTES, (i + 1) * CHUNK_BYTES);
-    const sliceDataUrl = await readBlobAsDataUrl(slice);
-    const commaIdx = sliceDataUrl.indexOf(',');
-    const chunkBase64 = commaIdx !== -1 ? sliceDataUrl.slice(commaIdx + 1) : sliceDataUrl;
+    const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB binary slices (well under Cloud Run 32MB limit)
+    const totalChunks = Math.max(1, Math.ceil(totalBytes / CHUNK_SIZE));
+    const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const chunkRes = await fetch('/api/upload-chunk', {
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(totalBytes, (i + 1) * CHUNK_SIZE);
+      const slice = blob.slice(start, end);
+
+      const ok = await sendBinaryChunkWithProgress(slice, uploadId, i, (chunkLoaded) => {
+        onProgress?.(Math.min(totalBytes, start + chunkLoaded), totalBytes);
+      });
+      if (!ok) {
+        return null;
+      }
+      onProgress?.(end, totalBytes);
+    }
+
+    const finalizeRes = await fetch('/api/upload-binary-finalize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         uploadId,
-        chunkIndex: i,
-        chunkBase64,
+        prefix,
+        mimeType,
+        fileName,
       }),
     });
-    if (!chunkRes.ok) {
-      return null;
-    }
-  }
-
-  const finalizeRes = await fetch('/api/upload-finalize', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      uploadId,
-      prefix,
-      mimeType,
-      fileName,
-    }),
-  });
-  if (!finalizeRes.ok) {
+    if (!finalizeRes.ok) return null;
+    const data = (await finalizeRes.json()) as { ok?: boolean; url?: string };
+    if (!data.url) return null;
+    return data.url;
+  } catch {
     return null;
   }
-  const json = (await finalizeRes.json()) as { ok?: boolean; url?: string; dataUrl?: string };
-  return json.dataUrl || json.url || null;
 }
 
 /**
- * Uploads any image or video File to local server (`/api/upload-media` or `/api/upload-chunk`)
- * and/or Firestore so it is immediately accessible without exhausting Firestore write quota.
+ * Uploads a raw JavaScript File/Blob directly to Firebase Storage using the modular v9/v10+ SDK
+ * (`ref`, `uploadBytesResumable`, `getDownloadURL`) and returns a permanent HTTPS URL.
+ * Reports live MB progress via `onProgress(loadedBytes, totalBytes)`.
  */
-export async function uploadMediaToCloud(file: File, prefix = 'media'): Promise<string> {
+export async function uploadMediaToCloud(
+  file: File,
+  prefix = 'lehengas',
+  onProgress?: UploadProgressCallback
+): Promise<string> {
   activeMutationsCount++;
   try {
-    const lowerName = (file.name || '').toLowerCase();
-    const lowerType = (file.type || '').toLowerCase();
+    let uploadBlob: Blob = file;
+    let safeFileName = (file.name || 'media').replace(/[^a-zA-Z0-9._-]/g, '_');
+    let contentType = file.type || 'application/octet-stream';
+
+    const lowerName = safeFileName.toLowerCase();
+    const lowerType = contentType.toLowerCase();
     const isHeicFile =
       lowerType.includes('heic') ||
       lowerType.includes('heif') ||
       lowerName.endsWith('.heic') ||
       lowerName.endsWith('.heif');
-    const isVideo =
-      lowerType.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(lowerName);
-    const isImage =
-      !isVideo &&
-      (lowerType.startsWith('image/') ||
-        isHeicFile ||
-        /\.(jpe?g|png|webp|gif|avif|heic|heif|svg)$/i.test(lowerName));
 
-    // For videos, upload directly via chunked binary upload so 20MB–100MB .mp4/.mov files upload in < 1s
-    if (isVideo) {
+    onProgress?.(0, Math.max(1, file.size));
+
+    // Convert raw HEIC/HEIF Blob to standard JPEG Blob in binary form (no Base64)
+    if (isHeicFile) {
       try {
-        const chunkedUrl = await uploadViaChunkedServerApi(
-          file,
-          prefix,
-          file.name || 'video.mp4',
-          file.type || 'video/mp4'
-        );
-        if (chunkedUrl) {
-          return chunkedUrl;
-        }
-      } catch {
-        // fallback below
-      }
-    }
-
-    let dataUrl: string;
-    if (isImage) {
-      const maxDim = prefix.includes('logo') ? 600 : 1400;
-      try {
-        if (isHeicFile) {
-          const converted = await heic2any({
-            blob: file,
-            toType: 'image/jpeg',
-            quality: 0.9,
-          });
-          const jpegBlob = Array.isArray(converted) ? converted[0] : converted;
-          const jpegFile = new File([jpegBlob], 'converted.jpg', { type: 'image/jpeg' });
-          dataUrl = await compressImageFileToDataUrl(jpegFile, maxDim);
-        } else {
-          dataUrl = await compressImageFileToDataUrl(file, maxDim);
-        }
-      } catch {
-        try {
-          const converted = await heic2any({
-            blob: file,
-            toType: 'image/jpeg',
-            quality: 0.9,
-          });
-          const jpegBlob = Array.isArray(converted) ? converted[0] : converted;
-          const jpegFile = new File([jpegBlob], 'converted.jpg', { type: 'image/jpeg' });
-          dataUrl = await compressImageFileToDataUrl(jpegFile, maxDim);
-        } catch {
-          // If client-side HEIC conversion failed, upload raw file via chunked server API (which converts via heic-convert on server)
-          const serverConvertedUrl = await uploadViaChunkedServerApi(
-            file,
-            prefix,
-            file.name || 'photo.heic',
-            file.type || 'image/heic'
-          );
-          if (serverConvertedUrl) {
-            return serverConvertedUrl;
-          }
-          dataUrl = await readBlobAsDataUrl(file);
-        }
-      }
-    } else {
-      dataUrl = await readBlobAsDataUrl(file);
-    }
-
-    // For images, return the compressed WebP dataUrl directly so it is stored permanently inside catalog.json & initialOutfits.ts
-    if (isImage && dataUrl.startsWith('data:image/') && dataUrl.length <= 800_000) {
-      return dataUrl;
-    }
-
-    // 1. Save directly to backend /api/upload-media first (immediate server sync, 0 Firestore write units)
-    try {
-      if (dataUrl.length <= 2_500_000) {
-        const resp = await fetch('/api/upload-media', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dataUrl, prefix }),
+        const converted = await heic2any({
+          blob: file,
+          toType: 'image/jpeg',
+          quality: 0.9,
         });
-        if (resp.ok) {
-          const json = (await resp.json()) as { ok?: boolean; url?: string; dataUrl?: string };
-          if (json.dataUrl || json.url) {
-            return (json.dataUrl || json.url)!;
-          }
-        }
-      } else {
-        const res = await fetch(dataUrl);
-        const blob = await res.blob();
-        const chunkedUrl = await uploadViaChunkedServerApi(
-          blob,
-          prefix,
-          file.name || 'media.webp',
-          blob.type || file.type || 'image/webp'
-        );
-        if (chunkedUrl) {
-          return chunkedUrl;
-        }
+        uploadBlob = Array.isArray(converted) ? converted[0] : converted;
+        safeFileName = safeFileName.replace(/\.(heic|heif)$/i, '.jpg');
+        contentType = 'image/jpeg';
+      } catch {
+        // Server binary endpoint also handles HEIC buffer conversion if browser conversion fails
       }
-    } catch {
-      // Backend API not reachable, continue to inline/Firestore
     }
 
-    // 2. If image or Firestore quota is exhausted, return inline data URL or object URL
-    if (isImage || isWriteQuotaExhausted) {
-      return dataUrl;
+    const sanitizedPrefix = prefix.replace(/[^a-zA-Z0-9/_-]/g, '') || 'lehengas';
+
+    // 1. Primary: Stream binary chunks directly to live server with real-time XHR MB progress
+    const binaryServerUrl = await uploadRawBinaryToServer(
+      uploadBlob,
+      sanitizedPrefix,
+      safeFileName,
+      contentType,
+      onProgress
+    );
+    if (binaryServerUrl) {
+      return binaryServerUrl;
     }
 
-    // 3. Otherwise store in chunked Firestore media_assets collection
-    const commaIdx = dataUrl.indexOf(',');
-    const header = commaIdx !== -1 ? dataUrl.slice(0, commaIdx) : `data:${file.type};base64`;
-    const base64Body = commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : dataUrl;
-    const mimeMatch = header.match(/^data:([^;]+);/);
-    const mimeType = mimeMatch ? mimeMatch[1] : file.type || 'application/octet-stream';
-
-    const CHUNK_SIZE = 600_000;
-    const totalChunks = Math.ceil(base64Body.length / CHUNK_SIZE);
-    const assetId = `${prefix.replace(/[^a-zA-Z0-9_-]/g, '')}-${Date.now()}-${Math.random()
-      .toString(36)
-      .slice(2, 7)}`;
-
-    const cloudUri = `cloud-media://${assetId}`;
-
-    try {
-      const res = await fetch(dataUrl);
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      resolvedMediaCache.set(cloudUri, blobUrl);
-    } catch {
-      // ignore
-    }
-
-    try {
-      for (let i = 0; i < totalChunks; i += 4) {
-        const batch = writeBatch(db);
-        for (let j = i; j < Math.min(i + 4, totalChunks); j++) {
-          const chunkSlice = base64Body.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
-          const chunkRef = doc(
-            db,
-            'media_assets',
-            assetId,
-            'chunks',
-            String(j).padStart(5, '0')
-          );
-          batch.set(chunkRef, {
-            index: j,
-            data: chunkSlice,
-            writeToken: WRITE_TOKEN,
-          });
+    // 2. Official Firebase Storage upload pipeline (`ref` -> `uploadBytesResumable` -> `getDownloadURL`)
+    if (!isStorageBucketUnavailable) {
+      const storagePath = `lehengas/${sanitizedPrefix}_${Date.now()}_${safeFileName}`;
+      try {
+        const storageRef = ref(storage, storagePath);
+        const uploadTask = uploadBytesResumable(storageRef, uploadBlob, { contentType });
+        uploadTask.on('state_changed', (snap) => {
+          onProgress?.(snap.bytesTransferred, snap.totalBytes);
+        });
+        await uploadTask;
+        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+        if (downloadURL && downloadURL.startsWith('http')) {
+          return downloadURL;
         }
-        await Promise.race([
-          batch.commit(),
-          new Promise<void>((_, reject) =>
-            setTimeout(() => reject(new Error('resource-exhausted')), 2000)
-          ),
-        ]);
+      } catch {
+        isStorageBucketUnavailable = true;
       }
-
-      await Promise.race([
-        setDoc(doc(db, 'media_assets', assetId), {
-          mimeType,
-          totalChunks,
-          createdAt: Date.now(),
-          writeToken: WRITE_TOKEN,
-        }),
-        new Promise<void>((_, reject) =>
-          setTimeout(() => reject(new Error('resource-exhausted')), 2000)
-        ),
-      ]);
-    } catch (err) {
-      tripWriteQuotaCircuitBreaker(err);
-      return dataUrl;
     }
 
-    return cloudUri;
+    throw new Error('Failed to upload media file');
   } finally {
     activeMutationsCount = Math.max(0, activeMutationsCount - 1);
   }
 }
 
+export function normalizeMediaUrl(url: string | undefined | null): string {
+  if (!url || typeof url !== 'string') return '';
+  const trimmed = url.trim();
+  const uploadsMatch = trimmed.match(/^https?:\/\/[^/]+(\/uploads\/.+)$/i);
+  if (uploadsMatch) {
+    return uploadsMatch[1];
+  }
+  return trimmed;
+}
+
 /**
- * Resolves a `cloud-media://<assetId>` URI into a playable/renderable Blob URL
- * by downloading and reassembling its chunks from Firestore.
+ * Resolves a `cloud-media://<assetId>` URI or a `/uploads/<filename>` URL into a playable/renderable Blob URL
+ * by downloading and reassembling its chunks from Firestore `media_assets`.
  */
 export async function resolveCloudMediaUrl(uri: string): Promise<string> {
-  if (!uri || !uri.startsWith('cloud-media://')) {
+  if (!uri) return uri;
+
+  let assetId = '';
+  if (uri.startsWith('cloud-media://')) {
+    assetId = uri.replace('cloud-media://', '').trim();
+  } else {
+    const normalized = normalizeMediaUrl(uri);
+    if (normalized.startsWith('/uploads/')) {
+      assetId = normalized.replace('/uploads/', '').split('?')[0].trim();
+    }
+  }
+
+  if (!assetId) {
     return uri;
   }
 
-  const cached = resolvedMediaCache.get(uri);
+  const safeAssetId = assetId.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const cacheKey = `cloud-media://${safeAssetId}`;
+
+  const cached = resolvedMediaCache.get(cacheKey);
   if (cached) return cached;
 
-  const inflight = inflightMediaPromises.get(uri);
+  const inflight = inflightMediaPromises.get(cacheKey);
   if (inflight) return inflight;
 
-  const assetId = uri.replace('cloud-media://', '').trim();
   const promise = (async () => {
     try {
-      const metaSnap = await getDoc(doc(db, 'media_assets', assetId));
+      let targetId = safeAssetId;
+      let metaSnap = await getDoc(doc(db, 'media_assets', targetId));
+      if (!metaSnap.exists() && !targetId.includes('.')) {
+        const webpSnap = await getDoc(doc(db, 'media_assets', `${targetId}.webp`));
+        if (webpSnap.exists()) {
+          targetId = `${targetId}.webp`;
+          metaSnap = webpSnap;
+        }
+      }
       if (!metaSnap.exists()) {
         return uri;
       }
-      const { mimeType = 'video/mp4' } = metaSnap.data() as {
-        mimeType?: string;
-        totalChunks?: number;
-      };
+      const { mimeType = targetId.endsWith('.mp4') ? 'video/mp4' : 'image/webp' } =
+        metaSnap.data() as {
+          mimeType?: string;
+          totalChunks?: number;
+        };
 
       const chunksQuery = query(
-        collection(db, 'media_assets', assetId, 'chunks'),
+        collection(db, 'media_assets', targetId, 'chunks'),
         orderBy('index', 'asc')
       );
       const chunksSnap = await getDocs(chunksQuery);
@@ -488,20 +378,27 @@ export async function resolveCloudMediaUrl(uri: string): Promise<string> {
       }
       const blob = new Blob([byteNumbers], { type: mimeType });
       const blobUrl = URL.createObjectURL(blob);
-      resolvedMediaCache.set(uri, blobUrl);
+      resolvedMediaCache.set(cacheKey, blobUrl);
       return blobUrl;
     } catch {
       return uri;
     } finally {
-      inflightMediaPromises.delete(uri);
+      inflightMediaPromises.delete(cacheKey);
     }
   })();
 
-  inflightMediaPromises.set(uri, promise);
+  inflightMediaPromises.set(cacheKey, promise);
   return promise;
 }
 
 function sanitizeOutfitForFirestore(outfit: LehengaOutfit, sortOrder: number, nowTs: number) {
+  const rawImages =
+    Array.isArray(outfit.mediaUrls) && outfit.mediaUrls.length > 0
+      ? outfit.mediaUrls.map(String)
+      : Array.isArray(outfit.images)
+      ? outfit.images.map(String)
+      : [];
+  const normalizedImages = rawImages.map((u) => normalizeMediaUrl(u)).filter(Boolean);
   return {
     id: String(outfit.id),
     code: String(outfit.color || outfit.code || ''),
@@ -512,10 +409,11 @@ function sanitizeOutfitForFirestore(outfit: LehengaOutfit, sortOrder: number, no
     originalRetailPrice: 0,
     description: String(outfit.description || ''),
     ogHumorTagline: String(outfit.ogHumorTagline || ''),
-    mediaUrl: String(outfit.mediaUrl || ''),
+    mediaUrl: normalizeMediaUrl(outfit.mediaUrl) || normalizedImages[0] || '',
     mediaType: outfit.mediaType === 'video' ? 'video' : 'image',
-    images: Array.isArray(outfit.images) ? outfit.images.map(String) : [],
-    videoUrl: String(outfit.videoUrl || ''),
+    mediaUrls: normalizedImages,
+    images: normalizedImages,
+    videoUrl: normalizeMediaUrl(outfit.videoUrl),
     sizes: Array.isArray(outfit.sizes) ? outfit.sizes.map(String) : [],
     available: outfit.available !== false,
     featured: false,
@@ -867,6 +765,12 @@ export function subscribeToLiveStore({
       const nextMap = new Map<string, LehengaOutfit & { sortOrder?: number; updatedAt?: number }>();
       snap.forEach((docSnap) => {
         const d = docSnap.data();
+        const rawMediaUrls = Array.isArray(d.mediaUrls) && d.mediaUrls.length > 0
+          ? d.mediaUrls
+          : Array.isArray(d.images)
+          ? d.images
+          : [];
+        const cleanMediaUrls = rawMediaUrls.map((u: unknown) => normalizeMediaUrl(String(u || ''))).filter(Boolean);
         nextMap.set(docSnap.id, {
           id: d.id || docSnap.id,
           code: d.color || d.code || '',
@@ -876,10 +780,11 @@ export function subscribeToLiveStore({
           pricePerDay: Number(d.pricePerDay) || 0,
           description: d.description || '',
           ogHumorTagline: d.ogHumorTagline || '',
-          mediaUrl: d.mediaUrl || '',
+          mediaUrl: normalizeMediaUrl(d.mediaUrl) || cleanMediaUrls[0] || '',
           mediaType: d.mediaType === 'video' ? 'video' : 'image',
-          images: Array.isArray(d.images) ? d.images : [],
-          videoUrl: d.videoUrl || '',
+          mediaUrls: cleanMediaUrls,
+          images: cleanMediaUrls,
+          videoUrl: normalizeMediaUrl(d.videoUrl),
           sizes: Array.isArray(d.sizes) ? d.sizes : [],
           available: d.available !== false,
           createdAt: d.createdAt || new Date().toISOString(),

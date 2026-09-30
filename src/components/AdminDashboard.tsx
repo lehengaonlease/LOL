@@ -42,7 +42,11 @@ import {
 import { LolBrandLogo } from './LolBrandLogo';
 import { VideoPlayer } from './VideoPlayer';
 import { OptimizedImage } from './OptimizedImage';
-import { uploadMediaToCloud } from '../services/firebaseSyncService';
+import {
+  uploadMediaToCloud,
+  formatUploadMB,
+  UploadProgressCallback,
+} from '../services/firebaseSyncService';
 
 interface AdminDashboardProps {
   outfits: LehengaOutfit[];
@@ -58,10 +62,79 @@ interface AdminDashboardProps {
   onBackToCatalog: () => void;
 }
 
-// Helper to upload a file to cloud Firestore (and local backend if available) for instant Vercel sync
-async function uploadFileToBackend(file: File, prefix: string): Promise<string> {
-  return uploadMediaToCloud(file, prefix);
+// Helper to upload a raw File/Blob directly to Firebase Storage and return a permanent HTTPS URL
+export async function handleMediaUpload(
+  file: File,
+  outfitId = 'lehenga',
+  onProgress?: UploadProgressCallback
+): Promise<string> {
+  return uploadMediaToCloud(file, outfitId, onProgress);
 }
+
+async function uploadFileToBackend(
+  file: File,
+  prefix: string,
+  onProgress?: UploadProgressCallback
+): Promise<string> {
+  return handleMediaUpload(file, prefix, onProgress);
+}
+
+// Reusable Real-Time Media Upload Progress Bar (MBs Uploaded + Percentage Indicator)
+const MediaUploadProgressBar: React.FC<{
+  label: string;
+  progressText: string;
+  percent: number;
+  compact?: boolean;
+}> = ({ label, progressText, percent, compact = false }) => {
+  const clampedPct = Math.max(0, Math.min(100, percent));
+  return (
+    <div
+      role="progressbar"
+      aria-valuenow={clampedPct}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      className={`w-full rounded-2xl bg-[#4A1525] text-white border border-[#F48FB1]/40 shadow-lg ${
+        compact ? 'p-2.5 space-y-1.5' : 'p-4 space-y-2.5'
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span
+          className={`font-semibold tracking-wide flex items-center gap-1.5 ${
+            compact ? 'text-[10px]' : 'text-xs'
+          }`}
+        >
+          <Upload className={compact ? 'w-3 h-3 text-[#F48FB1] animate-bounce' : 'w-3.5 h-3.5 text-[#F48FB1] animate-bounce'} />
+          <span>{clampedPct >= 100 ? 'Finalizing & Syncing Media...' : label}</span>
+        </span>
+        <span
+          className={`font-mono-num font-bold px-2 py-0.5 rounded-full bg-[#D81B60] text-white ${
+            compact ? 'text-[10px]' : 'text-xs'
+          }`}
+        >
+          {clampedPct}%
+        </span>
+      </div>
+
+      <div className={`w-full rounded-full bg-white/15 overflow-hidden ${compact ? 'h-2' : 'h-2.5'}`}>
+        <div
+          className="h-full bg-gradient-to-r from-[#D81B60] via-[#F06292] to-[#FF80AB] transition-all duration-150 ease-out"
+          style={{ width: `${Math.max(4, clampedPct)}%` }}
+        />
+      </div>
+
+      <div
+        className={`flex items-center justify-between font-mono-num text-white/90 ${
+          compact ? 'text-[10px]' : 'text-[11px]'
+        }`}
+      >
+        <span>{progressText || '0.00 MB / ...'}</span>
+        <span className="text-[#F48FB1]">
+          {clampedPct >= 100 ? 'Upload complete — saving URL' : 'Streaming binary...'}
+        </span>
+      </div>
+    </div>
+  );
+};
 
 interface EditableGridCardProps {
   outfit: LehengaOutfit;
@@ -97,18 +170,27 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
     outfit.videoUrl || (outfit.mediaType === 'video' ? outfit.mediaUrl : '')
   );
   const [imageSlots, setImageSlots] = useState<[string, string, string, string]>(() => {
-    const imgs =
-      Array.isArray(outfit.images) && outfit.images.length > 0
+    const rawList =
+      Array.isArray(outfit.mediaUrls) && outfit.mediaUrls.length > 0
+        ? outfit.mediaUrls
+        : Array.isArray(outfit.images) && outfit.images.length > 0
         ? outfit.images
         : outfit.mediaType === 'image' && outfit.mediaUrl
         ? [outfit.mediaUrl]
         : [];
-    return [imgs[0] || '', imgs[1] || '', imgs[2] || '', imgs[3] || ''];
+    return [rawList[0] || '', rawList[1] || '', rawList[2] || '', rawList[3] || ''];
   });
 
   const [showMediaTray, setShowMediaTray] = useState(false);
   const [uploadingSlot, setUploadingSlot] = useState<string | null>(null);
+  const [uploadProgressText, setUploadProgressText] = useState<string>('');
+  const [uploadPercent, setUploadPercent] = useState<number>(0);
   const [isSaving, setIsSaving] = useState(false);
+
+  const trackCardProgress: UploadProgressCallback = (loaded, total) => {
+    setUploadProgressText(formatUploadMB(loaded, total));
+    setUploadPercent(total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0);
+  };
 
   const latestSlotsRef = useRef<[string, string, string, string]>(imageSlots);
   const latestVideoRef = useRef<string>(videoUrl);
@@ -244,6 +326,7 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
       available: avail,
       mediaUrl: primaryMediaUrl,
       mediaType: primaryMediaType,
+      mediaUrls: finalImages,
       images: finalImages,
       videoUrl: vid,
     };
@@ -312,8 +395,13 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     setUploadingSlot(`img-${slotIdx}`);
+    trackCardProgress(0, file.size);
     try {
-      const url = await uploadFileToBackend(file, `lehenga-img-${slotIdx + 1}`);
+      const url = await handleMediaUpload(
+        file,
+        `${outfit.id}-img-${slotIdx + 1}`,
+        trackCardProgress
+      );
       const nextSlots = [...latestSlotsRef.current] as [string, string, string, string];
       if (slotIdx !== 0 && nextSlots[0] === '/images/lehenga-orange-zardosi.jpg') {
         nextSlots[0] = '';
@@ -333,6 +421,8 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
       );
     } finally {
       setUploadingSlot(null);
+      setUploadProgressText('');
+      setUploadPercent(0);
       e.target.value = '';
     }
   };
@@ -341,9 +431,18 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
     const files = Array.from(e.target.files || []).slice(0, 4);
     if (files.length === 0) return;
     setUploadingSlot('batch');
+    const totalBytes = files.reduce((acc, f) => acc + Math.max(1, f.size), 0);
+    const loadedPerFile = files.map(() => 0);
+    trackCardProgress(0, totalBytes);
     try {
       const urls = await Promise.all(
-        files.map((f, idx) => uploadFileToBackend(f, `lehenga-img-${idx + 1}`))
+        files.map((f, idx) =>
+          handleMediaUpload(f, `${outfit.id}-img-${idx + 1}`, (loaded) => {
+            loadedPerFile[idx] = loaded;
+            const sumLoaded = loadedPerFile.reduce((a, b) => a + b, 0);
+            trackCardProgress(sumLoaded, totalBytes);
+          })
+        )
       );
       const nextSlots: [string, string, string, string] = ['', '', '', ''];
       for (let i = 0; i < urls.length && i < 4; i++) {
@@ -360,6 +459,8 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
       );
     } finally {
       setUploadingSlot(null);
+      setUploadProgressText('');
+      setUploadPercent(0);
       e.target.value = '';
     }
   };
@@ -368,8 +469,9 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     setUploadingSlot('video');
+    trackCardProgress(0, file.size);
     try {
-      const url = await uploadFileToBackend(file, 'lehenga-video');
+      const url = await handleMediaUpload(file, `${outfit.id}-video`, trackCardProgress);
       latestVideoRef.current = url;
       setVideoUrl(url);
       setActiveMediaIndex(0);
@@ -381,6 +483,8 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
       );
     } finally {
       setUploadingSlot(null);
+      setUploadProgressText('');
+      setUploadPercent(0);
       e.target.value = '';
     }
   };
@@ -470,9 +574,26 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
                   onClick={() => batchPhotosInputRef.current?.click()}
                   className="px-2 py-0.5 rounded bg-[#4A1525] text-white text-[9px] font-semibold hover:bg-[#D81B60] cursor-pointer"
                 >
-                  {uploadingSlot === 'batch' ? 'Uploading...' : '+ Upload 4 Photos'}
+                  {uploadingSlot === 'batch'
+                    ? `Uploading ${uploadProgressText || '...'}`
+                    : '+ Upload 4 Photos'}
                 </button>
               </div>
+
+              {uploadingSlot && (
+                <MediaUploadProgressBar
+                  label={`Uploading ${
+                    uploadingSlot === 'video'
+                      ? 'Video'
+                      : uploadingSlot === 'batch'
+                      ? 'Batch Photos'
+                      : 'Photo'
+                  }...`}
+                  progressText={uploadProgressText}
+                  percent={uploadPercent}
+                  compact
+                />
+              )}
 
               {/* Optional Video Slot (Uses Photo 1 on main thumbnail when empty or cleared) */}
               <div className="p-2 rounded-xl bg-[#FFF0F5] border border-[#F8BBD0] space-y-1.5">
@@ -494,7 +615,9 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
                       onClick={() => videoFileInputRef.current?.click()}
                       className="px-2 py-0.5 rounded bg-[#D81B60] text-white text-[9px] font-semibold cursor-pointer"
                     >
-                      {uploadingSlot === 'video' ? 'Uploading...' : 'Upload Video'}
+                      {uploadingSlot === 'video'
+                        ? `Uploading ${uploadProgressText || '...'}`
+                        : 'Upload Video'}
                     </button>
                     {videoUrl.trim() && (
                       <button
@@ -600,6 +723,31 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
           </div>
         )}
 
+        {/* Stage-level MB Upload Progress Overlay when uploading photo/video */}
+        {uploadingSlot && !showMediaTray && (
+          <div className="absolute inset-0 z-20 bg-black/60 backdrop-blur-xs flex flex-col items-center justify-center p-4 text-center text-white">
+            <div className="w-full max-w-[220px] p-3.5 rounded-2xl bg-[#4A1525]/95 border border-[#F48FB1]/40 shadow-xl space-y-2">
+              <div className="flex items-center justify-between text-[10px] font-semibold">
+                <span>
+                  {uploadPercent >= 100
+                    ? 'Optimizing Media...'
+                    : `Uploading ${uploadingSlot === 'video' ? 'Video' : 'Photo'}...`}
+                </span>
+                <span className="font-mono-num text-[#F48FB1]">{uploadPercent}%</span>
+              </div>
+              <div className="w-full h-2 rounded-full bg-white/15 overflow-hidden">
+                <div
+                  className="h-full bg-[#D81B60] transition-all duration-150"
+                  style={{ width: `${Math.max(5, uploadPercent)}%` }}
+                />
+              </div>
+              <p className="text-[10px] font-mono-num text-white/90">
+                {uploadProgressText || 'Starting upload...'}
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Front-End Media Switcher Bar at Bottom of 3:4 Portrait */}
         <div
           onClick={(e) => e.stopPropagation()}
@@ -641,17 +789,33 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
             />
             <button
               type="button"
+              role="switch"
+              aria-checked={available}
               onClick={() => {
                 const nextAvail = !available;
                 setAvailable(nextAvail);
-                handleSaveCard(undefined, undefined, nextAvail);
+                handleSaveCard(
+                  undefined,
+                  undefined,
+                  nextAvail,
+                  nextAvail
+                    ? `Marked "${title}" as Available for booking!`
+                    : `Marked "${title}" as Booked (greyed out & locked on storefront)!`
+                );
               }}
-              className={`shrink-0 font-semibold cursor-pointer ${
-                available ? 'text-emerald-700' : 'text-amber-600'
+              className={`shrink-0 px-2.5 py-1 rounded-full border text-[10px] font-bold uppercase tracking-wider inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
+                available
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                  : 'border-gray-300 bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
-              title="Click to toggle availability"
+              title="Click to toggle Available / Booked"
             >
-              {available ? 'Available' : 'Booked'}
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  available ? 'bg-emerald-600' : 'bg-gray-500'
+                }`}
+              />
+              <span>{available ? 'Available' : 'Booked'}</span>
             </button>
           </div>
 
@@ -883,6 +1047,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [detailIsZoomed, setDetailIsZoomed] = useState(false);
   const [detailZoomOrigin, setDetailZoomOrigin] = useState({ x: 50, y: 35 });
   const [detailUploadingSlot, setDetailUploadingSlot] = useState<string | null>(null);
+  const [detailUploadProgressText, setDetailUploadProgressText] = useState<string>('');
+  const [detailUploadPercent, setDetailUploadPercent] = useState<number>(0);
+
+  const trackDetailProgress: UploadProgressCallback = (loaded, total) => {
+    setDetailUploadProgressText(formatUploadMB(loaded, total));
+    setDetailUploadPercent(total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0);
+  };
+
+  const [settingsUploadingLabel, setSettingsUploadingLabel] = useState<string | null>(null);
+  const [settingsUploadProgressText, setSettingsUploadProgressText] = useState<string>('');
+  const [settingsUploadPercent, setSettingsUploadPercent] = useState<number>(0);
+
+  const trackSettingsProgress: UploadProgressCallback = (loaded, total) => {
+    setSettingsUploadProgressText(formatUploadMB(loaded, total));
+    setSettingsUploadPercent(total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0);
+  };
   const detailMainVideoRef = useRef<HTMLVideoElement | null>(null);
   const detailPhotoInputRefs = [
     useRef<HTMLInputElement | null>(null),
@@ -1049,11 +1229,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     setDetailUploadingSlot(`img-${slotIdx}`);
+    trackDetailProgress(0, file.size);
     try {
-      const uploadedUrl = await uploadFileToBackend(file, `lehenga-img-${slotIdx + 1}`);
+      const uploadedUrl = await handleMediaUpload(
+        file,
+        `${detailEditOutfitRef.current.id}-img-${slotIdx + 1}`,
+        trackDetailProgress
+      );
       const currentOutfit = detailEditOutfitRef.current;
       if (!currentOutfit) return;
-      const existing = Array.isArray(currentOutfit.images) ? [...currentOutfit.images] : [];
+      const existing =
+        Array.isArray(currentOutfit.mediaUrls) && currentOutfit.mediaUrls.length > 0
+          ? [...currentOutfit.mediaUrls]
+          : Array.isArray(currentOutfit.images)
+          ? [...currentOutfit.images]
+          : [];
       const slots = [
         existing[0] || currentOutfit.mediaUrl || '',
         existing[1] || '',
@@ -1069,6 +1259,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         validImages[0] || currentOutfit.videoUrl || '/images/lehenga-orange-zardosi.jpg';
       const nextOutfit: LehengaOutfit = {
         ...currentOutfit,
+        mediaUrls: validImages,
         images: validImages,
         mediaUrl: primaryMediaUrl,
         mediaType: validImages.length > 0 ? 'image' : currentOutfit.videoUrl ? 'video' : 'image',
@@ -1079,8 +1270,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         nextOutfit,
         `Updated Photo ${slotIdx + 1} for ${currentOutfit.code}!`
       );
+    } catch {
+      showToast('Photo upload failed — please try again.');
     } finally {
       setDetailUploadingSlot(null);
+      setDetailUploadProgressText('');
+      setDetailUploadPercent(0);
       e.target.value = '';
     }
   };
@@ -1090,8 +1285,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     setDetailUploadingSlot('video');
+    trackDetailProgress(0, file.size);
     try {
-      const uploadedUrl = await uploadFileToBackend(file, 'lehenga-video');
+      const uploadedUrl = await handleMediaUpload(
+        file,
+        `${detailEditOutfitRef.current.id}-video`,
+        trackDetailProgress
+      );
       const currentOutfit = detailEditOutfitRef.current;
       if (!currentOutfit) return;
       const nextOutfit: LehengaOutfit = {
@@ -1103,8 +1303,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         nextOutfit,
         `Uploaded looping Video for ${currentOutfit.code} (now front-grid thumbnail)!`
       );
+    } catch {
+      showToast('Video upload failed — please try again.');
     } finally {
       setDetailUploadingSlot(null);
+      setDetailUploadProgressText('');
+      setDetailUploadPercent(0);
       e.target.value = '';
     }
   };
@@ -1263,6 +1467,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </button>
               </div>
 
+              {/* Live Upload Progress Banner in Detail Editor */}
+              {detailUploadingSlot && (
+                <MediaUploadProgressBar
+                  label={
+                    detailUploadingSlot === 'video'
+                      ? `Uploading Looping Video for ${detailEditOutfit.code}...`
+                      : `Uploading Photo for ${detailEditOutfit.code}...`
+                  }
+                  progressText={detailUploadProgressText}
+                  percent={detailUploadPercent}
+                />
+              )}
+
               {/* Exact Front-End Detailed Listing Layout */}
               <div className="w-full bg-white rounded-3xl overflow-hidden shadow-[0_24px_60px_-15px_rgba(216,27,96,0.12)] border border-[#F8BBD0]/80 grid grid-cols-1 lg:grid-cols-12">
                 {/* Left Column: Vertical Thumbnail Rail (4 Photos + 1 Video) + Main 3:4 Portrait Stage */}
@@ -1343,7 +1560,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               >
                                 <Upload className="w-2.5 h-2.5" />
                                 <span>
-                                  {detailUploadingSlot === 'video' ? '...' : 'Upload Vid'}
+                                  {detailUploadingSlot === 'video'
+                                    ? `${detailUploadPercent}%`
+                                    : 'Upload Vid'}
                                 </span>
                               </button>
                               {item.url && (
@@ -1391,7 +1610,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <Upload className="w-2.5 h-2.5" />
                                 <span>
                                   {detailUploadingSlot === `img-${item.slotIndex}`
-                                    ? '...'
+                                    ? `${detailUploadPercent}%`
                                     : item.label}
                                 </span>
                               </button>
@@ -1436,9 +1655,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <button
                             type="button"
                             onClick={() => detailVideoInputRef.current?.click()}
-                            className="px-4 py-2 rounded-xl bg-[#D81B60] text-white text-xs font-semibold cursor-pointer"
+                            disabled={detailUploadingSlot !== null}
+                            className="px-4 py-2 rounded-xl bg-[#D81B60] text-white text-xs font-semibold cursor-pointer disabled:opacity-60"
                           >
-                            Upload Video Now
+                            {detailUploadingSlot === 'video'
+                              ? `Uploading ${detailUploadProgressText || '...'}`
+                              : 'Upload Video Now'}
                           </button>
                         </div>
                       )
@@ -1465,10 +1687,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           onClick={() =>
                             detailPhotoInputRefs[activeDetailMedia.slotIndex].current?.click()
                           }
-                          className="px-4 py-2 rounded-xl bg-[#D81B60] text-white text-xs font-semibold cursor-pointer"
+                          disabled={detailUploadingSlot !== null}
+                          className="px-4 py-2 rounded-xl bg-[#D81B60] text-white text-xs font-semibold cursor-pointer disabled:opacity-60"
                         >
-                          Upload {activeDetailMedia.label}
+                          {detailUploadingSlot === `img-${activeDetailMedia.slotIndex}`
+                            ? `Uploading ${detailUploadProgressText || '...'}`
+                            : `Upload ${activeDetailMedia.label}`}
                         </button>
+                      </div>
+                    )}
+
+                    {/* Live MB Upload Progress Overlay on Main 3:4 Stage */}
+                    {detailUploadingSlot && (
+                      <div className="absolute inset-0 z-30 bg-black/60 backdrop-blur-xs flex flex-col items-center justify-center p-6 text-center text-white">
+                        <div className="w-full max-w-xs">
+                          <MediaUploadProgressBar
+                            label={
+                              detailUploadingSlot === 'video'
+                                ? 'Uploading Video...'
+                                : 'Uploading Photo...'
+                            }
+                            progressText={detailUploadProgressText}
+                            percent={detailUploadPercent}
+                          />
+                        </div>
                       </div>
                     )}
 
@@ -1749,14 +1991,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
 
-                  {/* Bottom Save & Back Actions */}
+                  {/* Bottom Availability Toggle & Save Actions */}
                   <div className="pt-8 mt-8 border-t border-[#F8BBD0]/60 flex flex-col sm:flex-row items-stretch sm:items-center gap-3.5">
                     <button
                       type="button"
-                      onClick={() => setDetailEditOutfit(null)}
-                      className="px-5 py-4 rounded-2xl border border-[#F8BBD0] bg-white text-xs font-semibold text-[#4A1525] hover:bg-[#FFF0F5] transition-colors cursor-pointer"
+                      role="switch"
+                      aria-checked={detailEditOutfit.available !== false}
+                      onClick={() => {
+                        const nextAvail = detailEditOutfit.available === false;
+                        const updated: LehengaOutfit = {
+                          ...detailEditOutfit,
+                          available: nextAvail,
+                        };
+                        handleSaveDetailOutfit(
+                          updated,
+                          nextAvail
+                            ? `Marked "${detailEditOutfit.title}" as Available for booking!`
+                            : `Marked "${detailEditOutfit.title}" as Booked (greyed out & locked on storefront)!`
+                        );
+                      }}
+                      className={`px-5 py-4 rounded-2xl border text-xs font-semibold transition-all inline-flex items-center justify-center gap-3 cursor-pointer ${
+                        detailEditOutfit.available !== false
+                          ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                          : 'border-gray-300 bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
                     >
-                      Done / Back to Grid
+                      <span
+                        className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                          detailEditOutfit.available !== false ? 'bg-emerald-600' : 'bg-gray-400'
+                        }`}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition duration-200 ease-in-out ${
+                            detailEditOutfit.available !== false ? 'translate-x-4' : 'translate-x-0'
+                          }`}
+                        />
+                      </span>
+                      <span className="uppercase tracking-wider font-bold">
+                        {detailEditOutfit.available !== false ? 'Available' : 'Booked'}
+                      </span>
                     </button>
 
                     <button
@@ -2024,6 +2297,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
+            {settingsUploadingLabel && (
+              <MediaUploadProgressBar
+                label={settingsUploadingLabel}
+                progressText={settingsUploadProgressText}
+                percent={settingsUploadPercent}
+              />
+            )}
+
             <div className="space-y-2 pt-2 border-t border-[#FCE4EC]">
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/70">
                 Hero Banner Video (`.mp4` / `.webm`)
@@ -2046,14 +2327,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     const file = e.target.files?.[0];
                     if (!file) return;
                     setIsSavingSettings(true);
+                    setSettingsUploadingLabel('Uploading Hero Banner Video...');
+                    trackSettingsProgress(0, file.size);
                     try {
-                      const url = await uploadFileToBackend(file, 'hero-banner-video');
+                      const url = await uploadFileToBackend(
+                        file,
+                        'hero-banner-video',
+                        trackSettingsProgress
+                      );
                       await handleSaveSettings(
                         { ...draftSettings, heroVideoUrl: url, heroMediaType: 'video' },
                         'New Hero Banner MP4 Video uploaded and published to live site!'
                       );
                     } finally {
                       setIsSavingSettings(false);
+                      setSettingsUploadingLabel(null);
+                      setSettingsUploadProgressText('');
+                      setSettingsUploadPercent(0);
+                      e.target.value = '';
                     }
                   }}
                   className="hidden"
@@ -2065,7 +2356,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="px-4 py-2.5 rounded-xl bg-[#D81B60] hover:bg-[#AD1457] text-white text-xs font-semibold inline-flex items-center justify-center gap-2 cursor-pointer shrink-0"
                 >
                   <Upload className="w-3.5 h-3.5" />
-                  <span>{isSavingSettings ? 'Uploading...' : 'Upload MP4 Video'}</span>
+                  <span>
+                    {settingsUploadingLabel === 'Uploading Hero Banner Video...'
+                      ? `Uploading ${settingsUploadPercent}%`
+                      : 'Upload MP4 Video'}
+                  </span>
                 </button>
               </div>
             </div>
@@ -2092,14 +2387,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     const file = e.target.files?.[0];
                     if (!file) return;
                     setIsSavingSettings(true);
+                    setSettingsUploadingLabel('Uploading Hero Banner Image...');
+                    trackSettingsProgress(0, file.size);
                     try {
-                      const url = await uploadFileToBackend(file, 'hero-poster');
+                      const url = await uploadFileToBackend(
+                        file,
+                        'hero-poster',
+                        trackSettingsProgress
+                      );
                       await handleSaveSettings(
                         { ...draftSettings, heroPosterUrl: url },
                         'Updated Hero Banner Poster / Image!'
                       );
                     } finally {
                       setIsSavingSettings(false);
+                      setSettingsUploadingLabel(null);
+                      setSettingsUploadProgressText('');
+                      setSettingsUploadPercent(0);
+                      e.target.value = '';
                     }
                   }}
                   className="hidden"
@@ -2110,7 +2415,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="px-4 py-2.5 rounded-xl border border-[#F8BBD0] bg-[#FFF5F8] hover:bg-white text-xs font-semibold text-[#4A1525] inline-flex items-center justify-center gap-2 cursor-pointer shrink-0"
                 >
                   <Upload className="w-3.5 h-3.5 text-[#D81B60]" />
-                  <span>Upload Banner Image</span>
+                  <span>
+                    {settingsUploadingLabel === 'Uploading Hero Banner Image...'
+                      ? `Uploading ${settingsUploadPercent}%`
+                      : 'Upload Banner Image'}
+                  </span>
                 </button>
               </div>
             </div>
@@ -2184,6 +2493,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </button>
             </div>
 
+            {settingsUploadingLabel && (
+              <MediaUploadProgressBar
+                label={settingsUploadingLabel}
+                progressText={settingsUploadProgressText}
+                percent={settingsUploadPercent}
+              />
+            )}
+
             {/* Top Navbar Logo Upload */}
             <div className="space-y-3">
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#4A1525]/70">
@@ -2206,8 +2523,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
-                    const url = await uploadFileToBackend(file, 'logo-top');
-                    setDraftSettings({ ...draftSettings, topLogoUrl: url });
+                    setSettingsUploadingLabel('Uploading Top Navbar Logo...');
+                    trackSettingsProgress(0, file.size);
+                    try {
+                      const url = await uploadFileToBackend(
+                        file,
+                        'logo-top',
+                        trackSettingsProgress
+                      );
+                      setDraftSettings({ ...draftSettings, topLogoUrl: url });
+                    } finally {
+                      setSettingsUploadingLabel(null);
+                      setSettingsUploadProgressText('');
+                      setSettingsUploadPercent(0);
+                      e.target.value = '';
+                    }
                   }}
                   className="hidden"
                 />
@@ -2217,7 +2547,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="px-4 py-2.5 rounded-xl border border-[#F8BBD0] bg-[#FFF5F8] hover:bg-white text-xs font-semibold text-[#4A1525] inline-flex items-center gap-2 cursor-pointer shrink-0"
                 >
                   <Upload className="w-3.5 h-3.5 text-[#D81B60]" />
-                  <span>Upload Top Logo</span>
+                  <span>
+                    {settingsUploadingLabel === 'Uploading Top Navbar Logo...'
+                      ? `Uploading ${settingsUploadPercent}%`
+                      : 'Upload Top Logo'}
+                  </span>
                 </button>
                 {draftSettings.topLogoUrl && (
                   <button
@@ -2323,8 +2657,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
-                    const url = await uploadFileToBackend(file, 'logo-bottom');
-                    setDraftSettings({ ...draftSettings, bottomLogoUrl: url });
+                    setSettingsUploadingLabel('Uploading Bottom Footer Logo...');
+                    trackSettingsProgress(0, file.size);
+                    try {
+                      const url = await uploadFileToBackend(
+                        file,
+                        'logo-bottom',
+                        trackSettingsProgress
+                      );
+                      setDraftSettings({ ...draftSettings, bottomLogoUrl: url });
+                    } finally {
+                      setSettingsUploadingLabel(null);
+                      setSettingsUploadProgressText('');
+                      setSettingsUploadPercent(0);
+                      e.target.value = '';
+                    }
                   }}
                   className="hidden"
                 />
@@ -2334,7 +2681,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="px-4 py-2.5 rounded-xl border border-[#F8BBD0] bg-[#FFF5F8] hover:bg-white text-xs font-semibold text-[#4A1525] inline-flex items-center gap-2 cursor-pointer shrink-0"
                 >
                   <Upload className="w-3.5 h-3.5 text-[#D81B60]" />
-                  <span>Upload Bottom Logo</span>
+                  <span>
+                    {settingsUploadingLabel === 'Uploading Bottom Footer Logo...'
+                      ? `Uploading ${settingsUploadPercent}%`
+                      : 'Upload Bottom Logo'}
+                  </span>
                 </button>
                 {draftSettings.bottomLogoUrl && (
                   <button
