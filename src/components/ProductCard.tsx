@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Heart, Share2, Film } from 'lucide-react';
-import { LehengaOutfit, resolveOutfitColor, getOutfitColorSwatch } from '../types';
+import { LehengaOutfit, resolveOutfitColor, getOutfitColorSwatch, formatShortDate } from '../types';
 import { VideoPlayer, resolvePublicVideoPath } from './VideoPlayer';
 import { OptimizedImage, resolveOptimizedImagePath } from './OptimizedImage';
 
@@ -11,6 +11,8 @@ interface ProductCardProps {
   onInspect: (outfit: LehengaOutfit) => void;
   isWishlisted: boolean;
   onToggleWishlist: (id: string) => void;
+  selectedDate?: string;
+  isBookedForDate?: boolean;
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({
@@ -20,6 +22,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   onInspect,
   isWishlisted,
   onToggleWishlist,
+  selectedDate,
+  isBookedForDate = false,
 }) => {
   const mediaItems = useMemo(() => {
     const items: { type: 'image' | 'video'; url: string; label: string }[] = [];
@@ -77,7 +81,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   }, [outfit.id, outfit.videoUrl, outfit.mediaUrl]);
 
   const currentMedia = mediaItems[activeMediaIndex] || mediaItems[0];
-  const isAvailable = outfit.available !== false;
+  const isAvailable = outfit.available !== false && !isBookedForDate;
 
   return (
     <article
@@ -113,9 +117,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         )}
 
         {!isAvailable && (
-          <div className="absolute inset-0 bg-black/35 flex items-center justify-center z-10 pointer-events-none">
-            <span className="px-4 py-2 rounded-full bg-gray-900/90 text-white text-xs uppercase tracking-[0.2em] font-bold shadow-md border border-white/20">
-              Booked
+          <div className="absolute inset-0 bg-black/40 flex items-center justify-center z-10 pointer-events-none p-3 text-center">
+            <span className="px-4 py-2 rounded-full bg-gray-900/95 text-white text-xs font-bold shadow-md border border-white/20 tracking-wide">
+              {isBookedForDate && selectedDate ? `Booked for ${formatShortDate(selectedDate)}` : 'Booked'}
             </span>
           </div>
         )}
@@ -250,9 +254,16 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               <button
                 type="button"
                 disabled
-                className="px-4 py-2.5 rounded-xl bg-gray-200 text-gray-500 text-xs uppercase tracking-wider font-semibold cursor-not-allowed"
+                title={
+                  isBookedForDate && selectedDate
+                    ? `This outfit is already reserved on ${formatShortDate(selectedDate)}`
+                    : 'Currently booked'
+                }
+                className="px-3.5 py-2.5 rounded-xl bg-gray-200 text-gray-600 text-xs font-semibold cursor-not-allowed select-none whitespace-nowrap"
               >
-                Booked
+                {isBookedForDate && selectedDate
+                  ? `Booked for ${formatShortDate(selectedDate)}`
+                  : 'Booked'}
               </button>
             )}
           </div>

@@ -15,7 +15,7 @@ import {
 } from 'firebase/firestore';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { LehengaOutfit, SiteSettings, CustomerTestimonial } from '../types';
+import { LehengaOutfit, SiteSettings, CustomerTestimonial, RentalBooking } from '../types';
 import { BUNDLED_CATALOG_UPDATED_AT } from '../data/initialOutfits';
 import heic2any from 'heic2any';
 
@@ -593,13 +593,38 @@ export async function saveTestimonialsToCloud(
   });
 }
 
+export async function saveBookingToCloud(
+  booking: RentalBooking,
+  allBookings: RentalBooking[]
+): Promise<void> {
+  try {
+    await fetch('/api/bookings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(booking),
+    });
+  } catch {
+    // ignore if static deployment
+  }
+
+  void runFirestoreWriteSafely(async () => {
+    await setDoc(doc(db, 'store_state', 'bookings'), {
+      items: allBookings,
+      updatedAt: Date.now(),
+      writeToken: WRITE_TOKEN,
+    });
+  });
+}
+
 interface LiveStoreCallbacks {
   initialOutfits: LehengaOutfit[];
   initialSettings: SiteSettings;
   initialTestimonials: CustomerTestimonial[];
+  initialBookings?: RentalBooking[];
   onOutfitsChange: (outfits: LehengaOutfit[]) => void;
   onSettingsChange: (settings: SiteSettings) => void;
   onTestimonialsChange: (testimonials: CustomerTestimonial[]) => void;
+  onBookingsChange?: (bookings: RentalBooking[]) => void;
 }
 
 /**
@@ -611,12 +636,14 @@ export function subscribeToLiveStore({
   onOutfitsChange,
   onSettingsChange,
   onTestimonialsChange,
+  onBookingsChange,
 }: LiveStoreCallbacks): () => void {
   let isDisposed = false;
   let hasLiveBackendServer = false;
   lastEmittedOutfitsJson = JSON.stringify(initialOutfits);
   let lastEmittedSettingsJson = '';
   let lastEmittedTestimonialsJson = '';
+  let lastEmittedBookingsJson = '';
 
   const emitIfChanged = (nextOutfits: LehengaOutfit[]) => {
     if (activeMutationsCount > 0) return;
@@ -629,10 +656,11 @@ export function subscribeToLiveStore({
   const syncWithBackendServer = async () => {
     if (activeMutationsCount > 0 || isDisposed) return;
     try {
-      const [outfitsRes, settingsRes, testimonialsRes] = await Promise.all([
+      const [outfitsRes, settingsRes, testimonialsRes, bookingsRes] = await Promise.all([
         fetch('/api/outfits', { cache: 'no-store' }),
         fetch('/api/settings', { cache: 'no-store' }),
         fetch('/api/testimonials', { cache: 'no-store' }),
+        fetch('/api/bookings', { cache: 'no-store' }),
       ]);
 
       if (isDisposed || activeMutationsCount > 0) return;
@@ -674,6 +702,21 @@ export function subscribeToLiveStore({
           if (nextTestJson !== lastEmittedTestimonialsJson) {
             lastEmittedTestimonialsJson = nextTestJson;
             onTestimonialsChange(serverTestimonials);
+          }
+        }
+      }
+
+      if (
+        bookingsRes.ok &&
+        (bookingsRes.headers.get('content-type') || '').includes('application/json')
+      ) {
+        hasLiveBackendServer = true;
+        const serverBookings = (await bookingsRes.json()) as RentalBooking[];
+        if (Array.isArray(serverBookings)) {
+          const nextBookingsJson = JSON.stringify(serverBookings);
+          if (nextBookingsJson !== lastEmittedBookingsJson) {
+            lastEmittedBookingsJson = nextBookingsJson;
+            onBookingsChange?.(serverBookings);
           }
         }
       }
@@ -834,6 +877,20 @@ export function subscribeToLiveStore({
     }
   );
 
+  const unsubBookings = onSnapshot(
+    doc(db, 'store_state', 'bookings'),
+    (snap) => {
+      if (hasLiveBackendServer || !snap.exists()) return;
+      const data = snap.data();
+      if (Array.isArray(data?.items)) {
+        onBookingsChange?.(data.items as RentalBooking[]);
+      }
+    },
+    (err) => {
+      tripWriteQuotaCircuitBreaker(err);
+    }
+  );
+
   return () => {
     isDisposed = true;
     clearInterval(pollTimer);
@@ -845,5 +902,6 @@ export function subscribeToLiveStore({
     unsubOutfits();
     unsubSettings();
     unsubTestimonials();
+    unsubBookings();
   };
 }

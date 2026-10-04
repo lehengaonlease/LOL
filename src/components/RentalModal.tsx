@@ -10,7 +10,7 @@ import {
   User,
   ShieldCheck,
 } from 'lucide-react';
-import { LehengaOutfit, RentalBookingDraft, formatWhatsAppUrlNumber } from '../types';
+import { LehengaOutfit, RentalBookingDraft, RentalBooking, formatWhatsAppUrlNumber, isOutfitBookedOnDate, formatShortDate } from '../types';
 import { OptimizedImage } from './OptimizedImage';
 
 interface RentalModalProps {
@@ -19,6 +19,8 @@ interface RentalModalProps {
   onConfirmBooking: (booking: RentalBookingDraft, syncToGoogleTasks: boolean) => Promise<void>;
   isTasksConnected: boolean;
   whatsappNumber?: string;
+  initialEventDate?: string;
+  bookings?: RentalBooking[];
 }
 
 const STUDIO_WHATSAPP_NUMBER = '7000861465';
@@ -49,6 +51,8 @@ export const RentalModal: React.FC<RentalModalProps> = ({
   onClose,
   onConfirmBooking,
   whatsappNumber,
+  initialEventDate,
+  bookings = [],
 }) => {
   const tomorrowStr = useMemo(() => {
     const d = new Date();
@@ -61,11 +65,16 @@ export const RentalModal: React.FC<RentalModalProps> = ({
 
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
-  const [eventDate, setEventDate] = useState(tomorrowStr);
-  const [returnDate, setReturnDate] = useState(() => addDaysToDateStr(tomorrowStr, 1));
+  const [eventDate, setEventDate] = useState(() => initialEventDate || tomorrowStr);
+  const [returnDate, setReturnDate] = useState(() => addDaysToDateStr(initialEventDate || tomorrowStr, 1));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [bookingComplete, setBookingComplete] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+
+  const isEventDateBooked = useMemo(() => {
+    if (!outfit || !eventDate) return false;
+    return isOutfitBookedOnDate(outfit, eventDate, bookings);
+  }, [outfit, eventDate, bookings]);
 
   const minReturnDateStr = useMemo(() => {
     if (!eventDate) return tomorrowStr;
@@ -345,7 +354,11 @@ export const RentalModal: React.FC<RentalModalProps> = ({
                       min={tomorrowStr}
                       value={eventDate}
                       onChange={(e) => handleEventDateChange(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-[#1C1310]/15 rounded-lg text-xs font-medium text-[#1C1310] focus:outline-none focus:border-[#1C1310]"
+                      className={`w-full px-3 py-2 bg-white border rounded-lg text-xs font-medium text-[#1C1310] focus:outline-none ${
+                        isEventDateBooked
+                          ? 'border-red-400 bg-red-50/50'
+                          : 'border-[#1C1310]/15 focus:border-[#1C1310]'
+                      }`}
                     />
                   </div>
 
@@ -363,6 +376,15 @@ export const RentalModal: React.FC<RentalModalProps> = ({
                     />
                   </div>
                 </div>
+
+                {isEventDateBooked && (
+                  <div className="p-3 rounded-lg bg-red-100 border border-red-300 text-red-800 text-xs font-semibold flex items-center gap-2">
+                    <span>⚠️</span>
+                    <span>
+                      {outfit.title} is already booked on {formatShortDate(eventDate)}. Please pick another date.
+                    </span>
+                  </div>
+                )}
 
                 {/* Automatic Multi-Day Rent Calculation Breakdown */}
                 <div className="pt-3 border-t border-[#1C1310]/10 flex flex-wrap items-center justify-between gap-2">
@@ -411,6 +433,11 @@ export const RentalModal: React.FC<RentalModalProps> = ({
                     if (!returnDate) {
                       e.preventDefault();
                       setValidationError('Please select your return date.');
+                      return;
+                    }
+                    if (isEventDateBooked) {
+                      e.preventDefault();
+                      setValidationError(`This outfit is already reserved on ${formatShortDate(eventDate)}. Please pick another date.`);
                       return;
                     }
                     if (isSubmitting) {

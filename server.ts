@@ -297,6 +297,15 @@ function loadBookings(): RentalBooking[] {
 
 function saveBookings(bookings: RentalBooking[]) {
   fs.writeFileSync(BOOKINGS_FILE, JSON.stringify(bookings, null, 2), 'utf-8');
+  try {
+    void setDoc(doc(serverDb, 'store_state', 'bookings'), {
+      items: bookings,
+      updatedAt: Date.now(),
+      writeToken: FIRESTORE_WRITE_TOKEN,
+    });
+  } catch (err) {
+    console.warn('Firestore bookings sync error:', err);
+  }
 }
 
 function isValidAdminPassword(pw?: string): boolean {

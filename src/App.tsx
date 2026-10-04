@@ -18,6 +18,7 @@ import {
   SlidersHorizontal,
   Palette,
   CheckCircle2,
+  Calendar,
   X,
 } from 'lucide-react';
 import { INITIAL_OUTFITS, BUNDLED_CATALOG_UPDATED_AT } from './data/initialOutfits';
@@ -26,6 +27,7 @@ import {
   LehengaOutfit,
   VibeCategory,
   RentalBookingDraft,
+  RentalBooking,
   StudioTaskReminder,
   SiteSettings,
   DEFAULT_SITE_SETTINGS,
@@ -35,6 +37,8 @@ import {
   LEHENGA_COLOR_OPTIONS,
   resolveOutfitColor,
   getOutfitColorSwatch,
+  isOutfitBookedOnDate,
+  formatShortDate,
 } from './types';
 import { Navbar } from './components/Navbar';
 import { HeroSection } from './components/HeroSection';
@@ -48,12 +52,14 @@ import { LolBrandLogo } from './components/LolBrandLogo';
 import { TestimonialSection } from './components/TestimonialSection';
 import { FaqModal } from './components/FaqModal';
 import { OptimizedImage } from './components/OptimizedImage';
+import { DateSelectionPopup } from './components/DateSelectionPopup';
 import {
   subscribeToLiveStore,
   saveOutfitToCloud,
   deleteOutfitFromCloud,
   saveSiteSettingsToCloud,
   saveTestimonialsToCloud,
+  saveBookingToCloud,
 } from './services/firebaseSyncService';
 import {
   requestGoogleTasksToken,
@@ -190,8 +196,84 @@ export function App() {
   >('featured');
   const [selectedColor, setSelectedColor] = useState<string>('All Colours');
   const [availabilityFilter, setAvailabilityFilter] = useState<'all' | 'available' | 'booked'>('all');
+  const [selectedEventDate, setSelectedEventDate] = useState<string>('');
+  const [bookings, setBookings] = useState<RentalBooking[]>(() => {
+    try {
+      const saved = localStorage.getItem('lol_indore_bookings_v2');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
   const [showWishlistOnly, setShowWishlistOnly] = useState(false);
+  const [isDatePopupOpen, setIsDatePopupOpen] = useState(false);
   const catalogGridRef = useRef<HTMLDivElement | null>(null);
+
+  // Modals & Full-Page Outfit Route
+  const [inspectOutfit, setInspectOutfit] = useState<LehengaOutfit | null>(() =>
+    findOutfitFromLocation(outfits)
+  );
+  const [rentalOutfit, setRentalOutfit] = useState<LehengaOutfit | null>(null);
+  const [shareOutfit, setShareOutfit] = useState<LehengaOutfit | null>(null);
+  const [isTasksDrawerOpen, setIsTasksDrawerOpen] = useState(false);
+  const [isFaqModalOpen, setIsFaqModalOpen] = useState(false);
+
+  // Google Tasks OAuth state
+  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(() =>
+    getStoredAccessToken()
+  );
+  const [googleTaskListId, setGoogleTaskListId] = useState<string>('@default');
+  const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
+  const [isLoadingGoogleTasks, setIsLoadingGoogleTasks] = useState(false);
+  const [googleTasksError, setGoogleTasksError] = useState<string | null>(null);
+
+  const todayStr = useMemo(() => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }, []);
+
+  // Auto Date selection popup: reliably triggers within 5 seconds on catalog when no date is selected
+  const hasAutoPoppedRef = useRef(false);
+
+  useEffect(() => {
+    // Clear any previous blocking session storage so it works reliably
+    try {
+      sessionStorage.removeItem('lol_date_popup_shown_v2');
+      sessionStorage.removeItem('lol_date_popup_shown');
+    } catch {
+      // ignore
+    }
+
+    if (activeView === 'admin' || inspectOutfit || selectedEventDate || hasAutoPoppedRef.current) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      if (!selectedEventDate && activeView === 'catalog' && !inspectOutfit) {
+        setIsDatePopupOpen(true);
+        hasAutoPoppedRef.current = true;
+      }
+    }, 5000);
+
+    return () => clearTimeout(timer);
+  }, [activeView, inspectOutfit, selectedEventDate]);
+
+  const handlePopupDateSelect = (chosenDate: string) => {
+    setSelectedEventDate(chosenDate);
+    setIsDatePopupOpen(false);
+    hasAutoPoppedRef.current = true;
+    const gridEl = document.getElementById('catalog-grid');
+    if (gridEl) {
+      gridEl.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
 
   const broadcastCatalogUpdate = (updatedOutfits: LehengaOutfit[]) => {
     try {
@@ -264,6 +346,7 @@ export function App() {
       initialOutfits: outfits,
       initialSettings: siteSettings,
       initialTestimonials: testimonials,
+      initialBookings: bookings,
       onOutfitsChange: (liveOutfits) => {
         setOutfits(liveOutfits);
         setInspectOutfit((prevInspect) => {
@@ -293,6 +376,14 @@ export function App() {
         setTestimonials(liveTestimonials);
         try {
           localStorage.setItem(STORAGE_KEY_TESTIMONIALS, JSON.stringify(liveTestimonials));
+        } catch {
+          // ignore
+        }
+      },
+      onBookingsChange: (liveBookings) => {
+        setBookings(liveBookings);
+        try {
+          localStorage.setItem('lol_indore_bookings_v2', JSON.stringify(liveBookings));
         } catch {
           // ignore
         }
@@ -402,24 +493,6 @@ export function App() {
     }
   };
 
-  // Modals & Full-Page Outfit Route
-  const [inspectOutfit, setInspectOutfit] = useState<LehengaOutfit | null>(() =>
-    findOutfitFromLocation(outfits)
-  );
-  const [rentalOutfit, setRentalOutfit] = useState<LehengaOutfit | null>(null);
-  const [shareOutfit, setShareOutfit] = useState<LehengaOutfit | null>(null);
-  const [isTasksDrawerOpen, setIsTasksDrawerOpen] = useState(false);
-  const [isFaqModalOpen, setIsFaqModalOpen] = useState(false);
-
-  // Google Tasks OAuth state
-  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(() =>
-    getStoredAccessToken()
-  );
-  const [googleTaskListId, setGoogleTaskListId] = useState<string>('@default');
-  const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
-  const [isLoadingGoogleTasks, setIsLoadingGoogleTasks] = useState(false);
-  const [googleTasksError, setGoogleTasksError] = useState<string | null>(null);
-
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY_OUTFITS, JSON.stringify(outfits));
@@ -482,6 +555,15 @@ export function App() {
     return [{ label: primaryLabel, value: 'All Vibes' }];
   }, [siteSettings.curatedCollectionTitle]);
 
+  const availableForDateCount = useMemo(() => {
+    if (!selectedEventDate) {
+      return outfits.filter((o) => o.available !== false).length;
+    }
+    return outfits.filter(
+      (o) => o.available !== false && !isOutfitBookedOnDate(o, selectedEventDate, bookings)
+    ).length;
+  }, [outfits, selectedEventDate, bookings]);
+
   const filteredOutfits = useMemo(() => {
     return outfits
       .filter((item) => {
@@ -489,7 +571,12 @@ export function App() {
         if (selectedVibe !== 'All Vibes' && item.vibeCategory !== selectedVibe) {
           return false;
         }
-        const isAvail = item.available !== false;
+
+        const isBooked =
+          item.available === false ||
+          (Boolean(selectedEventDate) && isOutfitBookedOnDate(item, selectedEventDate, bookings));
+        const isAvail = !isBooked;
+
         if (availabilityFilter === 'available' && !isAvail) return false;
         if (availabilityFilter === 'booked' && isAvail) return false;
 
@@ -522,6 +609,8 @@ export function App() {
     selectedVibe,
     selectedColor,
     availabilityFilter,
+    selectedEventDate,
+    bookings,
     searchQuery,
     sortBy,
     showWishlistOnly,
@@ -598,6 +687,36 @@ export function App() {
     booking: RentalBookingDraft,
     syncToGoogleTasks: boolean
   ) => {
+    const newBookingRecord: RentalBooking = {
+      id: `bk-${Date.now()}`,
+      outfitId: booking.outfit.id,
+      outfitCode: booking.outfit.code,
+      outfitTitle: booking.outfit.title,
+      pricePerDay: booking.outfit.pricePerDay,
+      rentalDate: booking.eventDate,
+      returnDate: booking.returnDate,
+      pickupTime: '01:00 PM - Afternoon Slay',
+      customerName: booking.customerName,
+      customerPhone: booking.customerPhone,
+      promisedNextDayReturn: booking.agreedToNextDayReturn,
+      createdAt: new Date().toISOString(),
+      syncedToGoogleTasks: Boolean(syncToGoogleTasks),
+    };
+
+    const nextBookings = [newBookingRecord, ...bookings];
+    setBookings(nextBookings);
+    try {
+      localStorage.setItem('lol_indore_bookings_v2', JSON.stringify(nextBookings));
+    } catch {
+      // ignore
+    }
+
+    try {
+      await saveBookingToCloud(newBookingRecord, nextBookings);
+    } catch (err) {
+      console.warn('Booking sync to cloud error:', err);
+    }
+
     const taskTitle = `Return ${booking.outfit.code} (${booking.outfit.title}) — Guest: ${booking.customerName}`;
     const taskNotes = `24-Hr Next-Day Return Policy Confirmed. Event Date: ${booking.eventDate} | Return & Steam-Sanitize Due: ${booking.returnDate} by 6:00 PM. Phone: ${booking.customerPhone}`;
 
@@ -771,6 +890,12 @@ export function App() {
             onShare={(o) => setShareOutfit(o)}
             isWishlisted={wishlist.includes(inspectOutfit.id)}
             onToggleWishlist={handleToggleWishlist}
+            selectedDate={selectedEventDate}
+            isBookedForDate={Boolean(
+              inspectOutfit &&
+              selectedEventDate &&
+              isOutfitBookedOnDate(inspectOutfit, selectedEventDate, bookings)
+            )}
           />
         </main>
       ) : (
@@ -842,11 +967,63 @@ export function App() {
                 )}
               </div>
 
-              {/* Right Filter Controls: Budget (Low to High / High to Low / Ranges), Colours & Available/Booked */}
+              {/* Right Filter Controls: Small Circle Icons for Budget, Availability & Date Selection */}
               <div className="flex flex-wrap items-center justify-start md:justify-end gap-2.5 shrink-0">
-                {/* 1. Budget & Price Sort Filter */}
-                <div className="relative inline-flex items-center">
-                  <ArrowUpDown className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 pointer-events-none" />
+                {/* Active Event Date Chip */}
+                {selectedEventDate && (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#FFF0F5] border border-[#F8BBD0] text-[#D81B60] text-xs font-semibold shadow-2xs">
+                    <button
+                      type="button"
+                      onClick={() => setIsDatePopupOpen(true)}
+                      className="inline-flex items-center gap-1.5 hover:opacity-80 transition-opacity cursor-pointer text-left"
+                      title="Click to change rental date"
+                      aria-label="Change rental date"
+                    >
+                      <Calendar className="w-3.5 h-3.5 shrink-0" />
+                      <span>{formatShortDate(selectedEventDate)}</span>
+                      <span className="text-[10px] text-[#4A1525]/60 font-mono-num font-normal">
+                        ({availableForDateCount} available)
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedEventDate('')}
+                      className="ml-0.5 p-0.5 rounded-full hover:bg-[#F8BBD0]/60 text-[#D81B60] cursor-pointer"
+                      title="Clear date filter"
+                      aria-label="Clear date filter"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+
+                {/* 1. Small Circle Icon: Budget & Price Sort */}
+                <div
+                  className={`relative w-9 h-9 sm:w-10 sm:h-10 rounded-full border flex items-center justify-center transition-all cursor-pointer shadow-2xs group ${
+                    sortBy !== 'featured'
+                      ? 'bg-[#D81B60] border-[#D81B60] text-white shadow-xs'
+                      : 'bg-white border-[#F8BBD0] text-[#4A1525] hover:border-[#D81B60] hover:bg-[#FFF0F5]'
+                  }`}
+                  title={
+                    sortBy !== 'featured'
+                      ? `Budget Filter: ${
+                          sortBy === 'price-asc'
+                            ? 'Low to High'
+                            : sortBy === 'price-desc'
+                            ? 'High to Low'
+                            : sortBy === 'under-2000'
+                            ? 'Under ₹2,000'
+                            : sortBy === '2000-3500'
+                            ? '₹2,000–₹3,500'
+                            : 'Above ₹3,500'
+                        }`
+                      : 'Filter & Sort by Budget'
+                  }
+                >
+                  <ArrowUpDown className="w-4 h-4 pointer-events-none" />
+                  {sortBy !== 'featured' && (
+                    <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-white rounded-full border-2 border-[#D81B60]" />
+                  )}
                   <select
                     value={sortBy}
                     onChange={(e) =>
@@ -861,11 +1038,7 @@ export function App() {
                       )
                     }
                     aria-label="Filter by Budget"
-                    className={`pl-8 pr-4 py-2 rounded-full border text-xs font-medium focus:outline-none cursor-pointer transition-colors ${
-                      sortBy !== 'featured'
-                        ? 'bg-[#FFF0F5] border-[#D81B60] text-[#D81B60] font-semibold'
-                        : 'bg-white border-[#F8BBD0] text-[#4A1525] focus:border-[#D81B60]'
-                    }`}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer rounded-full z-10"
                   >
                     <option value="featured">Budget: All / Featured</option>
                     <option value="price-asc">Budget: Low to High</option>
@@ -876,36 +1049,72 @@ export function App() {
                   </select>
                 </div>
 
-                {/* 2. Availability Filter (Available / Booked) */}
-                <div className="relative inline-flex items-center">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-[#D81B60] absolute left-3 pointer-events-none" />
+                {/* 2. Small Circle Icon: Availability Filter (Available / Booked Toggle) */}
+                <div
+                  className={`relative w-9 h-9 sm:w-10 sm:h-10 rounded-full border flex items-center justify-center transition-all cursor-pointer shadow-2xs group ${
+                    availabilityFilter !== 'all'
+                      ? 'bg-[#D81B60] border-[#D81B60] text-white shadow-xs'
+                      : 'bg-white border-[#F8BBD0] text-[#4A1525] hover:border-[#D81B60] hover:bg-[#FFF0F5]'
+                  }`}
+                  title={
+                    availabilityFilter === 'available'
+                      ? 'Status: Available Only'
+                      : availabilityFilter === 'booked'
+                      ? 'Status: Booked Only'
+                      : 'Status: Available & Booked (Click to filter)'
+                  }
+                >
+                  <CheckCircle2 className="w-4 h-4 pointer-events-none" />
+                  {availabilityFilter !== 'all' && (
+                    <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-white rounded-full border-2 border-[#D81B60]" />
+                  )}
                   <select
                     value={availabilityFilter}
                     onChange={(e) =>
                       setAvailabilityFilter(e.target.value as 'all' | 'available' | 'booked')
                     }
                     aria-label="Filter by Availability"
-                    className={`pl-8 pr-4 py-2 rounded-full border text-xs font-medium focus:outline-none cursor-pointer transition-colors ${
-                      availabilityFilter !== 'all'
-                        ? 'bg-[#FFF0F5] border-[#D81B60] text-[#D81B60] font-semibold'
-                        : 'bg-white border-[#F8BBD0] text-[#4A1525] focus:border-[#D81B60]'
-                    }`}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer rounded-full z-10"
                   >
                     <option value="all">Status: All (Available & Booked)</option>
                     <option value="available">Status: Available Only</option>
-                    <option value="booked">Status: Booked</option>
+                    <option value="booked">Status: Booked Only</option>
                   </select>
                 </div>
 
+                {/* 3. Small Circle Icon: Date Selection (Opens 'Lehenge me Slay kab kar rhi ho' Popup) */}
+                <button
+                  type="button"
+                  onClick={() => setIsDatePopupOpen(true)}
+                  className={`relative w-9 h-9 sm:w-10 sm:h-10 rounded-full border flex items-center justify-center transition-all cursor-pointer shadow-2xs group ${
+                    selectedEventDate
+                      ? 'bg-[#D81B60] border-[#D81B60] text-white shadow-xs'
+                      : 'bg-white border-[#F8BBD0] text-[#4A1525] hover:border-[#D81B60] hover:bg-[#FFF0F5]'
+                  }`}
+                  title={
+                    selectedEventDate
+                      ? `Event Date Selected: ${formatShortDate(selectedEventDate)} (Click to change)`
+                      : 'Pick Event Date to check outfit availability'
+                  }
+                  aria-label="Select Event Date"
+                >
+                  <Calendar className="w-4 h-4 pointer-events-none" />
+                  {selectedEventDate && (
+                    <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-white rounded-full border-2 border-[#D81B60]" />
+                  )}
+                </button>
+
                 {/* Clear Active Filters Button */}
-                {(sortBy !== 'featured' || availabilityFilter !== 'all') && (
+                {(sortBy !== 'featured' || availabilityFilter !== 'all' || selectedEventDate) && (
                   <button
                     type="button"
                     onClick={() => {
                       setSortBy('featured');
                       setAvailabilityFilter('all');
+                      setSelectedEventDate('');
                     }}
                     className="inline-flex items-center gap-1 px-3 py-2 rounded-full bg-[#4A1525] text-white text-xs font-semibold hover:bg-[#D81B60] transition-colors cursor-pointer"
+                    title="Reset all filters"
                   >
                     <X className="w-3 h-3" />
                     <span>Reset</span>
@@ -922,7 +1131,7 @@ export function App() {
                   No matching lehengas found
                 </h3>
                 <p className="text-xs text-[#4A1525]/60 mt-1 mb-5">
-                  Try clearing your budget, colour, or availability filters to explore all designs.
+                  Try clearing your budget, date, or availability filters to explore all designs.
                 </p>
                 <button
                   onClick={() => {
@@ -930,6 +1139,7 @@ export function App() {
                     setSelectedColor('All Colours');
                     setAvailabilityFilter('all');
                     setSortBy('featured');
+                    setSelectedEventDate('');
                     setSearchQuery('');
                     setShowWishlistOnly(false);
                   }}
@@ -943,17 +1153,25 @@ export function App() {
                 ref={catalogGridRef}
                 className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-7 lg:gap-8"
               >
-                {filteredOutfits.map((outfit) => (
-                  <ProductCard
-                    key={outfit.id}
-                    outfit={outfit}
-                    onRent={(o) => setRentalOutfit(o)}
-                    onShare={(o) => setShareOutfit(o)}
-                    onInspect={handleOpenOutfitPage}
-                    isWishlisted={wishlist.includes(outfit.id)}
-                    onToggleWishlist={handleToggleWishlist}
-                  />
-                ))}
+                {filteredOutfits.map((outfit) => {
+                  const isBookedForDate = selectedEventDate
+                    ? isOutfitBookedOnDate(outfit, selectedEventDate, bookings)
+                    : outfit.available === false;
+
+                  return (
+                    <ProductCard
+                      key={outfit.id}
+                      outfit={outfit}
+                      onRent={(o) => setRentalOutfit(o)}
+                      onShare={(o) => setShareOutfit(o)}
+                      onInspect={handleOpenOutfitPage}
+                      isWishlisted={wishlist.includes(outfit.id)}
+                      onToggleWishlist={handleToggleWishlist}
+                      selectedDate={selectedEventDate}
+                      isBookedForDate={isBookedForDate}
+                    />
+                  );
+                })}
               </div>
             )}
           </section>
@@ -1209,6 +1427,8 @@ export function App() {
         onConfirmBooking={handleConfirmBooking}
         isTasksConnected={Boolean(googleAccessToken)}
         whatsappNumber={siteSettings.whatsappNumber}
+        initialEventDate={selectedEventDate}
+        bookings={bookings}
       />
 
       {/* Social & WhatsApp Share Modal */}
@@ -1216,6 +1436,14 @@ export function App() {
 
       {/* FAQ Modal triggered from Bottom Footer */}
       <FaqModal isOpen={isFaqModalOpen} onClose={() => setIsFaqModalOpen(false)} />
+
+      {/* 5-Second Slay Date Selection Popup */}
+      <DateSelectionPopup
+        isOpen={isDatePopupOpen}
+        onClose={() => setIsDatePopupOpen(false)}
+        onSelectDate={handlePopupDateSelect}
+        currentSelectedDate={selectedEventDate}
+      />
 
       {/* Studio Bookings & Google Tasks Drawer */}
       <GoogleTasksDrawer

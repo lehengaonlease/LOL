@@ -27,6 +27,7 @@ import {
   MessageCircleHeart,
   Send,
   Tag,
+  Calendar,
 } from 'lucide-react';
 import {
   LehengaOutfit,
@@ -38,6 +39,7 @@ import {
   resolveOutfitColor,
   getOutfitColorSwatch,
   getNormalizedCoupons,
+  formatShortDate,
 } from '../types';
 import { LolBrandLogo } from './LolBrandLogo';
 import { VideoPlayer } from './VideoPlayer';
@@ -1050,6 +1052,51 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [detailUploadProgressText, setDetailUploadProgressText] = useState<string>('');
   const [detailUploadPercent, setDetailUploadPercent] = useState<number>(0);
 
+  const [newBookedDateInput, setNewBookedDateInput] = useState('');
+  const todayStr = useMemo(() => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }, []);
+
+  const handleAddBookedDate = async () => {
+    if (!detailEditOutfit || !newBookedDateInput) return;
+    const existing = Array.isArray(detailEditOutfit.bookedDates)
+      ? [...detailEditOutfit.bookedDates]
+      : [];
+    if (!existing.includes(newBookedDateInput)) {
+      existing.push(newBookedDateInput);
+      existing.sort();
+      const updated: LehengaOutfit = {
+        ...detailEditOutfit,
+        bookedDates: existing,
+      };
+      setDetailEditOutfit(updated);
+      const addedDate = newBookedDateInput;
+      setNewBookedDateInput('');
+      await handleSaveDetailOutfit(
+        updated,
+        `Blocked ${formatShortDate(addedDate)} for "${detailEditOutfit.title}" (locked for that date on storefront)!`
+      );
+    }
+  };
+
+  const handleRemoveBookedDate = async (dateStr: string) => {
+    if (!detailEditOutfit) return;
+    const existing = (detailEditOutfit.bookedDates || []).filter((d) => d !== dateStr);
+    const updated: LehengaOutfit = {
+      ...detailEditOutfit,
+      bookedDates: existing,
+    };
+    setDetailEditOutfit(updated);
+    await handleSaveDetailOutfit(
+      updated,
+      `Unblocked ${formatShortDate(dateStr)} for "${detailEditOutfit.title}".`
+    );
+  };
+
   const trackDetailProgress: UploadProgressCallback = (loaded, total) => {
     setDetailUploadProgressText(formatUploadMB(loaded, total));
     setDetailUploadPercent(total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0);
@@ -1883,111 +1930,131 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                     </div>
 
-                    {/* Studio Highlights (Same as Front End) */}
-                    <div className="grid grid-cols-2 gap-3 pt-4 border-t border-[#F8BBD0]/60">
-                      <div className="p-3 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0]/60 flex items-center gap-2.5">
-                        <ShieldCheck className="w-4 h-4 text-[#D81B60] shrink-0" />
-                        <span className="text-[11px] font-medium text-[#4A1525]/80">
-                          Steam-Sanitized & Custom Altered
-                        </span>
-                      </div>
-                      <div className="p-3 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0]/60 flex items-center gap-2.5">
-                        <Clock className="w-4 h-4 text-[#D81B60] shrink-0" />
-                        <span className="text-[11px] font-medium text-[#4A1525]/80">
-                          On time return
-                        </span>
-                      </div>
-                    </div>
+                    {/* Availability Selection Toggle & Booked Dates Manager */}
+                    <div className="pt-4 border-t border-[#F8BBD0]/60 space-y-3.5">
+                      {/* Availability Selection Toggle */}
+                      <div className="p-3.5 rounded-2xl bg-[#FFF9FB] border border-[#F8BBD0] flex items-center justify-between gap-3 shadow-2xs">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold uppercase tracking-wider text-[#4A1525]">
+                              Availability Status
+                            </span>
+                            <span
+                              className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                                detailEditOutfit.available !== false
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-gray-200 text-gray-700'
+                              }`}
+                            >
+                              {detailEditOutfit.available !== false ? 'Available' : 'Booked / Off'}
+                            </span>
+                          </div>
+                          <span className="text-[11px] text-[#4A1525]/65 block mt-0.5">
+                            {detailEditOutfit.available !== false
+                              ? 'Visible & bookable by customers on storefront'
+                              : 'Greyed out & locked on storefront for all customers'}
+                          </span>
+                        </div>
 
-                    {/* Inline Coupon Code Editor (Matches Front-End Use Coupon Code Box Position) */}
-                    <div className="p-4 rounded-xl bg-[#FFF5F8] border border-[#F8BBD0]/80 space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-semibold uppercase tracking-wider text-[#4A1525] flex items-center gap-1.5">
-                          <Tag className="w-3.5 h-3.5 text-[#D81B60]" />
-                          Use Coupon Code (Backend Controls)
-                        </span>
                         <button
                           type="button"
+                          role="switch"
+                          aria-checked={detailEditOutfit.available !== false}
                           onClick={() => {
-                            setDetailEditOutfit(null);
-                            setActiveTab('coupons');
+                            const nextAvail = detailEditOutfit.available === false;
+                            const updated: LehengaOutfit = {
+                              ...detailEditOutfit,
+                              available: nextAvail,
+                            };
+                            setDetailEditOutfit(updated);
+                            handleSaveDetailOutfit(
+                              updated,
+                              nextAvail
+                                ? `Marked "${detailEditOutfit.title}" as Available!`
+                                : `Marked "${detailEditOutfit.title}" as Booked (Unavailable)!`
+                            );
                           }}
-                          className="text-[11px] font-semibold text-[#D81B60] hover:underline cursor-pointer"
+                          className={`relative inline-flex h-7 w-13 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                            detailEditOutfit.available !== false ? 'bg-emerald-600' : 'bg-gray-400'
+                          }`}
                         >
-                          Manage All Coupons →
+                          <span
+                            className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200 ease-in-out ${
+                              detailEditOutfit.available !== false ? 'translate-x-6' : 'translate-x-0'
+                            }`}
+                          />
                         </button>
                       </div>
 
-                      {activeCouponsList.map((coupon) => (
-                        <div
-                          key={coupon.id}
-                          className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg bg-white border border-[#F8BBD0]"
-                        >
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="text"
-                              value={coupon.code}
-                              onChange={(e) => {
-                                const val = e.target.value.toUpperCase();
-                                setDraftSettings((prev) => ({
-                                  ...prev,
-                                  coupons: getNormalizedCoupons(prev).map((c) =>
-                                    c.id === coupon.id ? { ...c, code: val } : c
-                                  ),
-                                }));
-                              }}
-                              onBlur={(e) =>
-                                handleUpdateCouponField(
-                                  coupon.id,
-                                  e.target.value,
-                                  coupon.discountPercent
-                                )
-                              }
-                              className="w-28 px-2.5 py-1 rounded-md bg-[#FFF5F8] border border-[#F8BBD0] text-xs font-bold uppercase tracking-wider text-[#4A1525] focus:outline-none focus:border-[#D81B60]"
-                            />
-                            <div className="inline-flex items-center gap-1">
-                              <input
-                                type="number"
-                                min={1}
-                                max={99}
-                                value={coupon.discountPercent}
-                                onChange={(e) => {
-                                  const pct = Number(e.target.value) || 0;
-                                  setDraftSettings((prev) => ({
-                                    ...prev,
-                                    coupons: getNormalizedCoupons(prev).map((c) =>
-                                      c.id === coupon.id ? { ...c, discountPercent: pct } : c
-                                    ),
-                                  }));
-                                }}
-                                onBlur={(e) =>
-                                  handleUpdateCouponField(
-                                    coupon.id,
-                                    coupon.code,
-                                    Number(e.target.value) || 10
-                                  )
-                                }
-                                className="w-16 px-2 py-1 rounded-md bg-[#FFF5F8] border border-[#F8BBD0] text-xs font-semibold text-[#4A1525] focus:outline-none focus:border-[#D81B60]"
-                              />
-                              <span className="text-xs font-semibold text-[#D81B60]">% OFF</span>
+                      {/* Option to Add Dates (Reserved / Booked Dates Manager) */}
+                      <div className="p-3.5 rounded-2xl bg-[#FFF5F8] border border-[#F8BBD0] space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold uppercase tracking-wider text-[#4A1525] flex items-center gap-1.5">
+                            <Calendar className="w-3.5 h-3.5 text-[#D81B60]" />
+                            <span>Add Booked / Reserved Dates</span>
+                          </span>
+                          <span className="text-[10px] font-mono-num font-semibold text-[#D81B60] bg-white px-2 py-0.5 rounded-full border border-[#F8BBD0]">
+                            {(detailEditOutfit.bookedDates || []).length} dates reserved
+                          </span>
+                        </div>
+
+                        {/* Date Input & Add Button */}
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="date"
+                            value={newBookedDateInput}
+                            onChange={(e) => setNewBookedDateInput(e.target.value)}
+                            min={todayStr}
+                            aria-label="Select date to block"
+                            className="flex-1 px-3 py-2 bg-white border border-[#F8BBD0] rounded-xl text-xs font-semibold text-[#4A1525] focus:outline-none focus:border-[#D81B60] cursor-pointer"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleAddBookedDate}
+                            disabled={!newBookedDateInput}
+                            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shrink-0 ${
+                              newBookedDateInput
+                                ? 'bg-[#D81B60] hover:bg-[#AD1457] text-white shadow-xs'
+                                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                            }`}
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>Add Date</span>
+                          </button>
+                        </div>
+
+                        {/* List of Reserved Dates */}
+                        {Array.isArray(detailEditOutfit.bookedDates) && detailEditOutfit.bookedDates.length > 0 ? (
+                          <div className="space-y-1.5 pt-1">
+                            <span className="text-[10px] uppercase tracking-wider font-semibold text-[#4A1525]/60 block">
+                              Booked for specific dates:
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {detailEditOutfit.bookedDates.map((dStr) => (
+                                <span
+                                  key={dStr}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white border border-[#F8BBD0] text-[11px] font-semibold text-[#4A1525] shadow-2xs"
+                                >
+                                  <span>{formatShortDate(dStr)}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveBookedDate(dStr)}
+                                    className="text-gray-400 hover:text-red-600 transition-colors cursor-pointer"
+                                    title={`Unblock date ${dStr}`}
+                                    aria-label={`Unblock date ${dStr}`}
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </span>
+                              ))}
                             </div>
                           </div>
-
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => handleToggleCoupon(coupon.id)}
-                              className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors cursor-pointer ${
-                                coupon.enabled
-                                  ? 'bg-emerald-600 text-white'
-                                  : 'bg-gray-200 text-gray-600'
-                              }`}
-                            >
-                              {coupon.enabled ? 'ON' : 'OFF'}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                        ) : (
+                          <p className="text-[11px] text-[#4A1525]/60 italic">
+                            No specific dates blocked. This dress is open for bookings on all dates.
+                          </p>
+                        )}
+                      </div>
                     </div>
                   </div>
 

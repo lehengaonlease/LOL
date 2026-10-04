@@ -22,6 +22,7 @@ import {
   resolveOutfitColor,
   getOutfitColorSwatch,
   findMatchingActiveCoupon,
+  formatShortDate,
 } from '../types';
 import { ProductCard } from './ProductCard';
 import { VideoPlayer, resolvePublicVideoPath } from './VideoPlayer';
@@ -38,6 +39,8 @@ interface LookbookModalProps {
   onShare: (outfit: LehengaOutfit) => void;
   isWishlisted: boolean;
   onToggleWishlist: (id: string) => void;
+  selectedDate?: string;
+  isBookedForDate?: boolean;
 }
 
 export const LookbookModal: React.FC<LookbookModalProps> = ({
@@ -51,6 +54,8 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
   onShare,
   isWishlisted,
   onToggleWishlist,
+  selectedDate,
+  isBookedForDate = false,
 }) => {
   const [isZoomed, setIsZoomed] = useState(false);
   const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 35 });
@@ -490,7 +495,7 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
                 <span>Share</span>
               </button>
 
-              {outfit.available !== false ? (
+              {outfit.available !== false && !isBookedForDate ? (
                 <button
                   type="button"
                   onClick={() =>
@@ -518,7 +523,7 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
                   disabled
                   className="flex-1 py-4 px-6 rounded-2xl bg-gray-200 text-gray-500 text-xs uppercase tracking-[0.16em] font-semibold inline-flex items-center justify-center gap-2 cursor-not-allowed"
                 >
-                  <span>Booked — Unavailable</span>
+                  <span>{isBookedForDate && selectedDate ? `Booked for ${formatShortDate(selectedDate)}` : 'Booked'}</span>
                 </button>
               )}
             </div>

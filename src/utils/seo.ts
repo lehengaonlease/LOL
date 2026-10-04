@@ -115,7 +115,7 @@ export function buildWhatsAppShareUrl(outfit: LehengaOutfit): string {
     `Bestie look at this Lehenga before someone else books it! 😍🔥`,
     ``,
     `✨ *${outfit.title}* (${outfit.code})`,
-    `💸 *Lease Price:* ₹${outfit.pricePerDay.toLocaleString('en-IN')}/day (Retail: ₹${outfit.retailPrice.toLocaleString('en-IN')})`,
+    `💸 *Lease Price:* ₹${outfit.pricePerDay.toLocaleString('en-IN')}/day${outfit.retailPrice ? ` (Retail: ₹${outfit.retailPrice.toLocaleString('en-IN')})` : ''}`,
     `💬 "${outfit.ogHumorTagline || outfit.description}"`,
     ``,
     `Peep the fit on LOL: Lehenga On Lease By Sanjeevani 👇`,

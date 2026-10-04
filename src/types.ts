@@ -19,7 +19,13 @@ export interface LehengaOutfit {
   vibeCategory: string;
   sizes: string[];
   available: boolean;
-  createdAt: string;
+  createdAt?: string;
+  retailPrice?: number;
+  originalRetailPrice?: number;
+  sortOrder?: number;
+  featured?: boolean;
+  bookedDates?: string[];
+  updatedAt?: number | string;
 }
 
 export interface LehengaColorOption {
@@ -186,6 +192,51 @@ export interface RentalBooking {
   promisedNextDayReturn: boolean;
   createdAt: string;
   syncedToGoogleTasks?: boolean;
+}
+
+export function isOutfitBookedOnDate(
+  outfit: LehengaOutfit,
+  dateStr: string,
+  bookings: RentalBooking[]
+): boolean {
+  if (!outfit) return false;
+  if (outfit.available === false) return true;
+  if (Array.isArray(outfit.bookedDates) && outfit.bookedDates.includes(dateStr)) {
+    return true;
+  }
+  if (!dateStr || !Array.isArray(bookings)) return false;
+
+  return bookings.some((b) => {
+    const isSame =
+      b.outfitId === outfit.id ||
+      (Boolean(b.outfitCode && outfit.code) &&
+        b.outfitCode.trim().toUpperCase() === outfit.code.trim().toUpperCase());
+    if (!isSame) return false;
+
+    const rStart = b.rentalDate;
+    const rEnd = b.returnDate || b.rentalDate;
+    if (rStart && rEnd) {
+      return dateStr >= rStart && dateStr <= rEnd;
+    }
+    return dateStr === rStart;
+  });
+}
+
+export function formatShortDate(dateStr: string): string {
+  if (!dateStr) return '';
+  try {
+    const parts = dateStr.split('-');
+    if (parts.length < 3) return dateStr;
+    const y = Number(parts[0]);
+    const m = Number(parts[1]);
+    const d = Number(parts[2]);
+    if (!y || !m || !d) return dateStr;
+    const date = new Date(y, m - 1, d);
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${d} ${months[date.getMonth()]}`;
+  } catch {
+    return dateStr;
+  }
 }
 
 export interface GoogleTaskList {
