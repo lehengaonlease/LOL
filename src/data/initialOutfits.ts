@@ -1,78 +1,165 @@
-import { LehengaOutfit } from "../types";
+import { LehengaOutfit } from '../types';
 
-export const BUNDLED_CATALOG_UPDATED_AT = 1790751908485;
+export const BUNDLED_CATALOG_UPDATED_AT = 1791275000000;
 
 export const INITIAL_OUTFITS: LehengaOutfit[] = [
   {
-    "id": "lol-custom-1790667856104",
+    "id": "lol-custom-1791209954353",
     "code": "Rani Pink",
     "color": "Rani Pink",
-    "title": "Modern Crimson & Geometric Mirror-Work Lehenga",
-    "vibeCategory": "Navratri Ni Pehvesh",
-    "pricePerDay": 799,
-    "description": "A breathtaking crimson red lehenga featuring sleek multi-colored geometric borders, shimmering mirror-work detailing, and a gracefully draped contemporary dupatta. The striking contrast motifs and crisp, clean craftsmanship create a perfect blend of high-fashion allure and festive elegance, making it an ideal choice for modern celebrations, weddings, and high-end special occasions.\n",
+    "title": "Kaali Dress, Neela Swag 💙",
+    "pricePerDay": 899,
+    "description": "Black ka bold look aur blue motifs ka killer pop 💙\nSimple bhi, stylish bhi — full-on statement look! ✨",
     "ogHumorTagline": "Why spend a fortune when you can break Instagram for ₹2,499/day? Rent it, flex it, return it tomorrow.",
-    "mediaUrl": "/uploads/lehengas-lol-custom-1790667856104-img-1.webp",
+    "mediaUrl": "/uploads/lol-custom-1791209954353-img-1-1791209969988_IMG_4600.webp",
     "mediaType": "image",
     "images": [
-      "/uploads/lehengas-lol-custom-1790667856104-img-1.webp",
-      "/uploads/lehengas-lol-custom-1790667856104-img-2.webp",
-      "/uploads/lehengas-lol-custom-1790667856104-img-3.webp"
+      "/uploads/lol-custom-1791209954353-img-1-1791209969988_IMG_4600.webp",
+      "/uploads/lol-custom-1791209954353-img-2-1791209976573_IMG_4568.webp",
+      "/uploads/lol-custom-1791209954353-img-3-1791209970031_IMG_4551.webp",
+      "/uploads/lol-custom-1791209954353-img-4-1791209966974_IMG_4549.webp"
     ],
-    "videoUrl": "",
-    "sizes": [
-      "XS-S",
-      "M-L"
-    ],
-    "available": true,
-    "createdAt": "2026-09-29T08:06:57.411Z",
-    "sortOrder": 0
-  },
-  {
-    "id": "lol-custom-1790667630490",
-    "code": "Crimson Red",
-    "color": "Crimson Red",
-    "title": "Royal Red & Ivory Heritage Lehenga",
+    "videoUrl": "/uploads/lol-custom-1791209954353-video-1791210667377_WhatsApp_Video_2026-10-05_at_7.5.mp4",
     "vibeCategory": "Navratri Ni Pehvesh",
-    "pricePerDay": 799,
-    "description": "A stunning red and ivory lehenga featuring intricate floral embroidery, golden detailing, and a graceful traditional dupatta. The striking red motifs and elegant craftsmanship create a perfect blend of heritage charm and contemporary elegance, making it ideal for festive celebrations, weddings, and special occasions.",
-    "ogHumorTagline": "Why spend a fortune when you can break Instagram for ₹2,499/day? Rent it, flex it, return it tomorrow.",
-    "mediaUrl": "/uploads/lehengas-lol-custom-1790667630490-img-1.webp",
-    "mediaType": "image",
-    "images": [
-      "/uploads/lehengas-lol-custom-1790667630490-img-1.webp",
-      "/uploads/lehengas-lol-custom-1790667630490-img-2.webp",
-      "/uploads/lehengas-lol-custom-1790667630490-img-3.webp"
-    ],
-    "videoUrl": "/uploads/lehenga-video-1790671005167-q60kh.mp4",
     "sizes": [
       "Free-Size"
     ],
     "available": true,
-    "createdAt": "2026-09-29T08:06:57.411Z",
-    "sortOrder": 1
+    "createdAt": "2026-10-05T14:19:14.353Z",
+    "mediaUrls": [
+      "/uploads/lol-custom-1791209954353-img-1-1791209969988_IMG_4600.webp",
+      "/uploads/lol-custom-1791209954353-img-2-1791209976573_IMG_4568.webp",
+      "/uploads/lol-custom-1791209954353-img-3-1791209970031_IMG_4551.webp",
+      "/uploads/lol-custom-1791209954353-img-4-1791209966974_IMG_4549.webp"
+    ]
+  },
+  {
+    "id": "lol-custom-1791208779770",
+    "code": "Midnight Black",
+    "color": "Midnight Black",
+    "title": "Kaali Ada, Rangon Ka Jalwa 🖤❤️",
+    "pricePerDay": 899,
+    "description": "Black ki elegance, vibrant prints ka charm aur flowy silhouette — yeh look hai subtle bhi, statement bhi. 💫",
+    "ogHumorTagline": "Why spend a fortune when you can break Instagram for ₹2,499/day? Rent it, flex it, return it tomorrow.",
+    "mediaUrl": "/uploads/lol-custom-1791208779770-img-1-1791209197315_IMG_4650.webp",
+    "mediaType": "image",
+    "images": [
+      "/uploads/lol-custom-1791208779770-img-1-1791209197315_IMG_4650.webp",
+      "/uploads/lol-custom-1791208779770-img-2-1791209256540_IMG_4702-r6ofa.webp",
+      "/uploads/lol-custom-1791208779770-img-3-1791209240131_IMG_4698-r6qza.webp",
+      "/uploads/lol-custom-1791208779770-img-4-1791209214948_IMG_4706-r6ssq.webp"
+    ],
+    "vibeCategory": "Navratri Ni Pehvesh",
+    "sizes": [
+      "Free-Size"
+    ],
+    "available": true,
+    "createdAt": "2026-10-05T13:59:39.770Z",
+    "mediaUrls": [
+      "/uploads/lol-custom-1791208779770-img-1-1791209197315_IMG_4650.webp",
+      "/uploads/lol-custom-1791208779770-img-2-1791209256540_IMG_4702-r6ofa.webp",
+      "/uploads/lol-custom-1791208779770-img-3-1791209240131_IMG_4698-r6qza.webp",
+      "/uploads/lol-custom-1791208779770-img-4-1791209214948_IMG_4706-r6ssq.webp"
+    ],
+    "videoUrl": "/uploads/lol-custom-1791208779770-video-1791210686624_WhatsApp_Video_2026-10-05_at_7.5.mp4"
   },
   {
     "id": "lol-custom-1790537581891",
-    "code": "Haldi Yellow",
-    "color": "Haldi Yellow",
-    "title": "Vibrant Mustard & Rani Pink Festive Lehenga",
-    "vibeCategory": "Navratri Ni Pehvesh",
-    "pricePerDay": 799,
-    "description": "A breathtaking mustard yellow lehenga featuring a striking rani pink border, intricate multi-colored geometric accents, and delicate shimmering embellishments. The rich color-blocked design and modern craftsmanship create a perfect balance of festive warmth and high-fashion allure, making it an ideal choice for vibrant sangeet ceremonies, weddings, and premium special occasions.\n",
-    "ogHumorTagline": "Why spend a fortune when you can break Instagram for ₹2,499/day? Rent it, flex it, return it tomorrow.",
+    "originalRetailPrice": 0,
     "mediaUrl": "/uploads/lehengas-lol-custom-1790537581891-img-1.webp",
-    "mediaType": "image",
+    "videoUrl": "/uploads/lol-custom-1790537581891-video-1790754762813_IMG_4447.mp4",
+    "ogHumorTagline": "Why spend a fortune when you can break Instagram for ₹2,499/day? Rent it, flex it, return it tomorrow.",
+    "description": "Sunshine yellow ka charm, pink borders ka pop aur traditional prints ka perfect touch 💕\nEk aisa look jo simple elegance ko festive celebration mein badal de. ✨",
+    "sortOrder": 2,
     "images": [
       "/uploads/lehengas-lol-custom-1790537581891-img-1.webp",
-      "/uploads/lehengas-lol-custom-1790537581891-img-2.webp"
-    ],
-    "videoUrl": "",
-    "sizes": [
-      "Freesize"
+      "/uploads/lehengas-lol-custom-1790537581891-img-2.webp",
+      "/uploads/lol-custom-1790537581891-img-3-1790753634596_IMG_4344.webp",
+      "/uploads/lol-custom-1790537581891-img-4-1790753640236_IMG_4338.webp"
     ],
     "available": true,
-    "createdAt": "2026-09-29T08:06:57.411Z",
-    "sortOrder": 2
+    "mediaType": "image",
+    "color": "Haldi Yellow",
+    "sizes": [
+      "Free-Size"
+    ],
+    "mediaUrls": [
+      "/uploads/lehengas-lol-custom-1790537581891-img-1.webp",
+      "/uploads/lehengas-lol-custom-1790537581891-img-2.webp",
+      "/uploads/lol-custom-1790537581891-img-3-1790753634596_IMG_4344.webp",
+      "/uploads/lol-custom-1790537581891-img-4-1790753640236_IMG_4338.webp"
+    ],
+    "pricePerDay": 899,
+    "title": "Peeli Chunni, Desi Rani 💛",
+    "updatedAt": 1790757270036,
+    "featured": false,
+    "code": "Haldi Yellow",
+    "vibeCategory": "Navratri Ni Pehvesh"
+  },
+  {
+    "available": true,
+    "title": "Laal Rang, Desi Andaaz ❤️✨",
+    "description": "Laal dupatte ki richness, ivory lehenga ki simplicity aur traditional motifs ka beautiful touch ❤️\nEk royal desi look, jo elegance bhi laaye aur attention bhi. ✨",
+    "sortOrder": 1,
+    "mediaUrl": "/uploads/lehengas-lol-custom-1790667630490-img-1.webp",
+    "videoUrl": "/uploads/lehenga-video-1790671005167-q60kh.mp4",
+    "originalRetailPrice": 0,
+    "sizes": [
+      "Free-Size"
+    ],
+    "code": "Crimson Red",
+    "id": "lol-custom-1790667630490",
+    "featured": false,
+    "images": [
+      "/uploads/lehengas-lol-custom-1790667630490-img-1.webp",
+      "/uploads/lehengas-lol-custom-1790667630490-img-2.webp",
+      "/uploads/lehenga-img-3-1790755931983-xf2io.webp",
+      "/uploads/lehenga-img-4-1790755956491-c7p9a.webp"
+    ],
+    "updatedAt": 1790757270184,
+    "ogHumorTagline": "Why spend a fortune when you can break Instagram for ₹2,499/day? Rent it, flex it, return it tomorrow.",
+    "pricePerDay": 899,
+    "vibeCategory": "Navratri Ni Pehvesh",
+    "mediaType": "image",
+    "mediaUrls": [
+      "/uploads/lehengas-lol-custom-1790667630490-img-1.webp",
+      "/uploads/lehengas-lol-custom-1790667630490-img-2.webp",
+      "/uploads/lehenga-img-3-1790755931983-xf2io.webp",
+      "/uploads/lehenga-img-4-1790755956491-c7p9a.webp"
+    ],
+    "color": "Crimson Red"
+  },
+  {
+    "sizes": [
+      "Free-Size"
+    ],
+    "pricePerDay": 899,
+    "mediaType": "image",
+    "code": "Rani Pink",
+    "id": "lol-custom-1790667856104",
+    "videoUrl": "/uploads/lol-custom-1790667856104-video-1790754679475_IMG_4430.mp4",
+    "mediaUrl": "/uploads/lehengas-lol-custom-1790667856104-img-1.webp",
+    "updatedAt": 1790757270262,
+    "title": "Bhagwa Rang, Royal Andaaz 🧡",
+    "featured": false,
+    "ogHumorTagline": "Why spend a fortune when you can break Instagram for ₹2,499/day? Rent it, flex it, return it tomorrow.",
+    "images": [
+      "/uploads/lehengas-lol-custom-1790667856104-img-1.webp",
+      "/uploads/lehengas-lol-custom-1790667856104-img-2.webp",
+      "/uploads/lehengas-lol-custom-1790667856104-img-3.webp",
+      "/uploads/lol-custom-1790667856104-img-4-1790753481129_IMG_4295.webp"
+    ],
+    "originalRetailPrice": 0,
+    "available": true,
+    "description": "Sunset orange ka rich charm, intricate traditional borders aur flowy silhouette — yeh look hai graceful, regal aur effortlessly stunning. 🧡✨\nFestive season ho ya shaadi ka function, this one knows how to stand out! 👑",
+    "vibeCategory": "Navratri Ni Pehvesh",
+    "sortOrder": 0,
+    "mediaUrls": [
+      "/uploads/lehengas-lol-custom-1790667856104-img-1.webp",
+      "/uploads/lehengas-lol-custom-1790667856104-img-2.webp",
+      "/uploads/lehengas-lol-custom-1790667856104-img-3.webp",
+      "/uploads/lol-custom-1790667856104-img-4-1790753481129_IMG_4295.webp"
+    ],
+    "color": "Rani Pink"
   }
 ];

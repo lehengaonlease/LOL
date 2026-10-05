@@ -70,17 +70,29 @@ export const TestimonialSection: React.FC<TestimonialSectionProps> = ({
     setFormError(null);
     const localObjectUrl = URL.createObjectURL(file);
     setPhotoPreviewUrl(localObjectUrl);
-    setPhotoUrl(localObjectUrl);
     setIsUploadingPhoto(true);
 
-    try {
-      const cloudUrl = await uploadMediaToCloud(file, 'client-review');
-      setPhotoUrl(cloudUrl);
-    } catch {
-      setFormError('Could not upload the selected photo.');
-    } finally {
+    // Read immediately as persistent base64 Data URL so photoUrl is NEVER an ephemeral blob: URL
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64Data = reader.result as string;
+      setPhotoUrl(base64Data);
+
+      try {
+        const cloudUrl = await uploadMediaToCloud(file, 'client-review');
+        if (cloudUrl && !cloudUrl.startsWith('blob:')) {
+          setPhotoUrl(cloudUrl);
+        }
+      } catch {
+        // Base64 dataUrl remains active and will be converted into a permanent file on the backend
+      } finally {
+        setIsUploadingPhoto(false);
+      }
+    };
+    reader.onerror = () => {
       setIsUploadingPhoto(false);
-    }
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleSubmitReview = (e: React.FormEvent) => {
@@ -93,7 +105,11 @@ export const TestimonialSection: React.FC<TestimonialSectionProps> = ({
       setFormError('Please write a few words about your experience.');
       return;
     }
-    if (!photoUrl) {
+    if (isUploadingPhoto) {
+      setFormError('Please wait a moment while your photo finishes uploading.');
+      return;
+    }
+    if (!photoUrl || photoUrl.startsWith('blob:')) {
       setFormError('Please upload 1 picture of your lehenga look.');
       return;
     }
@@ -223,7 +239,7 @@ export const TestimonialSection: React.FC<TestimonialSectionProps> = ({
             <button
               type="button"
               onClick={() => setIsFormOpen(true)}
-              className="inline-flex items-center gap-2 px-5 py-3 rounded-full bg-[#D81B60] hover:bg-[#AD1457] text-white text-xs uppercase tracking-wider font-semibold shadow-sm transition-all cursor-pointer"
+              className="inline-flex items-center gap-2 px-5 py-3 rounded-full bg-gradient-to-r from-[#D81B60] to-[#E91E63] hover:from-[#AD1457] hover:to-[#C2185B] text-white text-xs uppercase tracking-wider font-semibold shadow-md hover:shadow-lg active:scale-95 transition-all cursor-pointer"
             >
               <Camera className="w-4 h-4" />
               <span>Add Your Photo & Review</span>
@@ -550,9 +566,13 @@ export const TestimonialSection: React.FC<TestimonialSectionProps> = ({
                 type="submit"
                 onClick={() => unlockCameraAudio()}
                 disabled={isUploadingPhoto}
-                className="w-full py-3.5 px-6 rounded-xl bg-[#D81B60] hover:bg-[#AD1457] text-white text-xs uppercase tracking-[0.16em] font-semibold shadow-md transition-colors cursor-pointer"
+                className={`w-full py-3.5 px-6 rounded-xl text-white text-xs uppercase tracking-[0.16em] font-semibold shadow-md transition-all ${
+                  isUploadingPhoto
+                    ? 'bg-gray-400 cursor-not-allowed opacity-75'
+                    : 'bg-[#D81B60] hover:bg-[#AD1457] active:scale-[0.99] cursor-pointer'
+                }`}
               >
-                Publish My Photo & Review
+                {isUploadingPhoto ? 'Uploading Photo to Cloud...' : 'Publish My Photo & Review'}
               </button>
             </form>
           </div>

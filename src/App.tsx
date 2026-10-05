@@ -70,7 +70,7 @@ import {
   toggleTaskStatus,
 } from './services/googleTasksService';
 
-const STORAGE_KEY_OUTFITS = 'lol_indore_outfits_v6';
+const STORAGE_KEY_OUTFITS = 'lol_indore_outfits_v10';
 const STORAGE_KEY_TASKS = 'lol_indore_tasks_v2';
 const STORAGE_KEY_WISHLIST = 'lol_indore_wishlist_v2';
 const STORAGE_KEY_SITE_SETTINGS = 'lol_indore_site_settings_v4';
@@ -149,7 +149,16 @@ export function App() {
       const saved = localStorage.getItem(STORAGE_KEY_OUTFITS);
       if (saved !== null && localTs >= BUNDLED_CATALOG_UPDATED_AT) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Always preserve videoUrl from INITIAL_OUTFITS so videos are never lost
+          return parsed.map((item: LehengaOutfit) => {
+            const bundled = INITIAL_OUTFITS.find((b) => b.id === item.id);
+            if (bundled && bundled.videoUrl && !item.videoUrl) {
+              return { ...item, videoUrl: bundled.videoUrl };
+            }
+            return item;
+          });
+        }
       }
     } catch {
       // ignore
@@ -449,6 +458,11 @@ export function App() {
       // ignore
     }
     try {
+      await fetch(`/api/testimonials/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    } catch {
+      // ignore
+    }
+    try {
       await saveTestimonialsToCloud(updated);
     } catch (err) {
       console.error('Failed to sync deleted testimonial to cloud:', err);
@@ -472,6 +486,15 @@ export function App() {
       // ignore
     }
     try {
+      await fetch('/api/testimonials/sync', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ testimonials: updated }),
+      });
+    } catch {
+      // ignore
+    }
+    try {
       await saveTestimonialsToCloud(updated);
     } catch (err) {
       console.error('Failed to sync testimonial reply to cloud:', err);
@@ -483,6 +506,24 @@ export function App() {
     setTestimonials(updated);
     try {
       localStorage.setItem(STORAGE_KEY_TESTIMONIALS, JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+    try {
+      const resp = await fetch('/api/testimonials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newTestimonial),
+      });
+      if (resp.ok) {
+        const savedServerRecord = (await resp.json()) as CustomerTestimonial;
+        if (savedServerRecord && savedServerRecord.id) {
+          setTestimonials((prev) =>
+            prev.map((t) => (t.id === newTestimonial.id ? savedServerRecord : t))
+          );
+          return;
+        }
+      }
     } catch {
       // ignore
     }

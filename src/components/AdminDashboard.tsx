@@ -28,6 +28,7 @@ import {
   Send,
   Tag,
   Calendar,
+  RotateCw,
 } from 'lucide-react';
 import {
   LehengaOutfit,
@@ -81,6 +82,23 @@ async function uploadFileToBackend(
   return handleMediaUpload(file, prefix, onProgress);
 }
 
+export async function rotatePhotoOnServer(photoUrl: string): Promise<string> {
+  try {
+    const res = await fetch('/api/rotate-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: photoUrl, degrees: 90 }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.url) return data.url;
+    }
+  } catch {
+    // ignore
+  }
+  return photoUrl;
+}
+
 // Reusable Real-Time Media Upload Progress Bar (MBs Uploaded + Percentage Indicator)
 const MediaUploadProgressBar: React.FC<{
   label: string;
@@ -131,7 +149,7 @@ const MediaUploadProgressBar: React.FC<{
       >
         <span>{progressText || '0.00 MB / ...'}</span>
         <span className="text-[#F48FB1]">
-          {clampedPct >= 100 ? 'Upload complete — saving URL' : 'Streaming binary...'}
+          {clampedPct >= 100 ? 'Saving & Syncing...' : 'Uploading file...'}
         </span>
       </div>
     </div>
@@ -704,19 +722,43 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
                       {uploadingSlot === `img-${slotIdx}` ? '...' : `Upload #${slotIdx + 1}`}
                     </button>
                     {imageSlots[slotIdx] && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const next = [...imageSlots] as [string, string, string, string];
-                          next[slotIdx] = '';
-                          setImageSlots(next);
-                          handleSaveCard(next);
-                        }}
-                        className="text-red-500 hover:text-red-700 p-0.5 cursor-pointer"
-                        title="Clear photo"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const currentUrl = imageSlots[slotIdx];
+                            if (!currentUrl) return;
+                            const rotatedUrl = await rotatePhotoOnServer(currentUrl);
+                            const next = [...imageSlots] as [string, string, string, string];
+                            next[slotIdx] = rotatedUrl;
+                            setImageSlots(next);
+                            await handleSaveCard(
+                              next,
+                              undefined,
+                              undefined,
+                              `Rotated Photo ${slotIdx + 1} by 90° for ${code}!`
+                            );
+                          }}
+                          className="px-1.5 py-1 rounded-lg bg-[#FFF0F5] hover:bg-[#D81B60] hover:text-white text-[9px] font-semibold text-[#D81B60] border border-[#F8BBD0] inline-flex items-center gap-0.5 cursor-pointer"
+                          title="Rotate photo 90 degrees clockwise"
+                        >
+                          <RotateCw className="w-2.5 h-2.5" />
+                          <span>90°</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = [...imageSlots] as [string, string, string, string];
+                            next[slotIdx] = '';
+                            setImageSlots(next);
+                            handleSaveCard(next);
+                          }}
+                          className="text-red-500 hover:text-red-700 p-0.5 cursor-pointer"
+                          title="Clear photo"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 ))}
@@ -1590,7 +1632,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             )}
                           </button>
 
-                          {/* Upload / Clear Button on Bottom of Each Rail Slot */}
+                          {/* Upload / Rotate / Clear Button on Bottom of Each Rail Slot */}
                           {isVideoSlot ? (
                             <div className="flex flex-col">
                               <input
@@ -1639,7 +1681,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               )}
                             </div>
                           ) : (
-                            <>
+                            <div className="flex flex-col">
                               <input
                                 ref={detailPhotoInputRefs[item.slotIndex]}
                                 type="file"
@@ -1647,21 +1689,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 onChange={(e) => handleDetailPhotoUpload(item.slotIndex, e)}
                                 className="hidden"
                               />
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  detailPhotoInputRefs[item.slotIndex].current?.click()
-                                }
-                                className="w-full py-1 bg-[#FFF0F5] hover:bg-[#D81B60] hover:text-white text-[#4A1525] text-[9px] font-semibold uppercase tracking-wider flex items-center justify-center gap-1 border-t border-[#F8BBD0] cursor-pointer"
-                              >
-                                <Upload className="w-2.5 h-2.5" />
-                                <span>
-                                  {detailUploadingSlot === `img-${item.slotIndex}`
-                                    ? `${detailUploadPercent}%`
-                                    : item.label}
-                                </span>
-                              </button>
-                            </>
+                              <div className="flex items-center">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    detailPhotoInputRefs[item.slotIndex].current?.click()
+                                  }
+                                  className="flex-1 py-1 bg-[#FFF0F5] hover:bg-[#D81B60] hover:text-white text-[#4A1525] text-[9px] font-semibold uppercase tracking-wider flex items-center justify-center gap-1 border-t border-[#F8BBD0] cursor-pointer"
+                                >
+                                  <Upload className="w-2.5 h-2.5" />
+                                  <span className="truncate">
+                                    {detailUploadingSlot === `img-${item.slotIndex}`
+                                      ? `${detailUploadPercent}%`
+                                      : item.label}
+                                  </span>
+                                </button>
+                                {item.url && (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      const currentUrl = item.url;
+                                      if (!currentUrl) return;
+                                      const rotatedUrl = await rotatePhotoOnServer(currentUrl);
+                                      const currentOutfit = detailEditOutfitRef.current;
+                                      if (!currentOutfit) return;
+                                      const existing =
+                                        Array.isArray(currentOutfit.mediaUrls) &&
+                                        currentOutfit.mediaUrls.length > 0
+                                          ? [...currentOutfit.mediaUrls]
+                                          : Array.isArray(currentOutfit.images)
+                                          ? [...currentOutfit.images]
+                                          : [];
+                                      const slots = [
+                                        existing[0] || currentOutfit.mediaUrl || '',
+                                        existing[1] || '',
+                                        existing[2] || '',
+                                        existing[3] || '',
+                                      ];
+                                      slots[item.slotIndex] = rotatedUrl;
+                                      const validImages = slots.map((s) => s.trim()).filter(Boolean);
+                                      const nextOutfit: LehengaOutfit = {
+                                        ...currentOutfit,
+                                        mediaUrls: validImages,
+                                        images: validImages,
+                                        mediaUrl: validImages[0] || currentOutfit.mediaUrl,
+                                      };
+                                      setDetailActiveMediaIdx(item.slotIndex);
+                                      await handleSaveDetailOutfit(
+                                        nextOutfit,
+                                        `Rotated ${item.label} by 90° for ${currentOutfit.code}!`
+                                      );
+                                    }}
+                                    className="px-1.5 py-1 bg-[#FFF0F5] hover:bg-[#D81B60] hover:text-white text-[#D81B60] text-[9px] font-semibold border-t border-l border-[#F8BBD0] inline-flex items-center gap-0.5 cursor-pointer shrink-0"
+                                    title="Rotate photo 90 degrees clockwise"
+                                  >
+                                    <RotateCw className="w-2.5 h-2.5" />
+                                    <span>90°</span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
                           )}
                         </div>
                       );

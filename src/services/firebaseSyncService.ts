@@ -12,11 +12,12 @@ import {
   orderBy,
   setLogLevel,
   enableNetwork,
+  disableNetwork,
 } from 'firebase/firestore';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { LehengaOutfit, SiteSettings, CustomerTestimonial, RentalBooking } from '../types';
-import { BUNDLED_CATALOG_UPDATED_AT } from '../data/initialOutfits';
+import { INITIAL_OUTFITS, BUNDLED_CATALOG_UPDATED_AT } from '../data/initialOutfits';
 import heic2any from 'heic2any';
 
 // Silence internal @firebase/firestore SDK console errors/warnings (e.g. free-tier quota backoff logs)
@@ -35,16 +36,31 @@ const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const storage = getStorage(app, firebaseConfig.storageBucket);
 
-enableNetwork(db).catch(() => {});
+// Daily free tier quota resets at midnight US Pacific Time: 2026-10-06T08:00:00.000Z
+const KNOWN_QUOTA_RESET_TIMESTAMP = 1791273600000;
 
 let isWriteQuotaExhausted = (() => {
+  if (Date.now() < KNOWN_QUOTA_RESET_TIMESTAMP) {
+    return true;
+  }
   try {
-    const until = Number(sessionStorage.getItem(QUOTA_EXHAUSTED_KEY) || '0');
+    const until = Number(
+      localStorage.getItem(QUOTA_EXHAUSTED_KEY) ||
+      sessionStorage.getItem(QUOTA_EXHAUSTED_KEY) ||
+      '0'
+    );
     return until > Date.now();
   } catch {
     return false;
   }
 })();
+
+if (isWriteQuotaExhausted) {
+  // Proactively disable Firestore network to shut down gRPC connections and eliminate RPC 'Write' stream errors
+  disableNetwork(db).catch(() => {});
+} else {
+  enableNetwork(db).catch(() => {});
+}
 
 let activeMutationsCount = 0;
 let lastEmittedOutfitsJson = '';
@@ -88,20 +104,27 @@ function isQuotaError(err: unknown): boolean {
       ? `${err.name} ${err.message} ${(err as { code?: string }).code || ''}`
       : String(err);
   return (
+    msg.includes('RESOURCE_EXHAUSTED') ||
     msg.includes('resource-exhausted') ||
     msg.includes('Quota limit exceeded') ||
-    msg.includes('Quota exceeded')
+    msg.includes('Quota exceeded') ||
+    msg.includes("RpcConnection RPC 'Write'") ||
+    msg.includes("GrpcConnection RPC 'Write'")
   );
 }
 
-function tripWriteQuotaCircuitBreaker(err: unknown) {
-  if (isQuotaError(err)) {
+function tripWriteQuotaCircuitBreaker(err?: unknown) {
+  if (!err || isQuotaError(err)) {
     isWriteQuotaExhausted = true;
     try {
-      sessionStorage.setItem(QUOTA_EXHAUSTED_KEY, String(Date.now() + 60 * 60 * 1000));
+      const until = String(Math.max(KNOWN_QUOTA_RESET_TIMESTAMP, Date.now() + 24 * 60 * 60 * 1000));
+      localStorage.setItem(QUOTA_EXHAUSTED_KEY, until);
+      sessionStorage.setItem(QUOTA_EXHAUSTED_KEY, until);
     } catch {
       // ignore
     }
+    // Shut down gRPC streams so Firestore stops throwing RPC 'Write' stream errors
+    disableNetwork(db).catch(() => {});
   }
 }
 
@@ -162,9 +185,49 @@ function sendBinaryChunkWithProgress(
   });
 }
 
+function sendDirectBinaryWithProgress(
+  fileBlob: Blob,
+  prefix: string,
+  fileName: string,
+  onProgress?: UploadProgressCallback
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload-binary', true);
+    xhr.setRequestHeader('Content-Type', fileBlob.type || 'application/octet-stream');
+    xhr.setRequestHeader('X-Prefix', prefix);
+    xhr.setRequestHeader('X-File-Name', encodeURIComponent(fileName));
+
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && onProgress) {
+        onProgress(ev.loaded, ev.total);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const res = JSON.parse(xhr.responseText);
+          if (res && res.url) {
+            resolve(res.url);
+            return;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      resolve(null);
+    };
+    xhr.onerror = () => resolve(null);
+    xhr.ontimeout = () => resolve(null);
+    xhr.send(fileBlob);
+  });
+}
+
 /**
- * Streams a raw binary File/Blob in 2MB binary slices via `/api/upload-binary-chunk` + `/api/upload-binary-finalize`
- * with real-time byte progress (`XMLHttpRequest.upload.onprogress`) and zero Base64 / FileReader overhead.
+ * Streams raw binary File/Blob to the live server with real-time byte progress.
+ * For files <= 25MB: uploads via fast single-stream direct POST `/api/upload-binary` (<500ms).
+ * For files > 25MB: streams in 4MB binary slices via `/api/upload-binary-chunk` + `/api/upload-binary-finalize`.
  */
 async function uploadRawBinaryToServer(
   blob: Blob,
@@ -177,7 +240,17 @@ async function uploadRawBinaryToServer(
     const totalBytes = Math.max(1, blob.size);
     onProgress?.(0, totalBytes);
 
-    const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB binary slices (well under Cloud Run 32MB limit)
+    // Fast-path: single stream direct binary POST for files <= 25MB
+    if (totalBytes <= 25 * 1024 * 1024) {
+      const directUrl = await sendDirectBinaryWithProgress(blob, prefix, fileName, onProgress);
+      if (directUrl) {
+        onProgress?.(totalBytes, totalBytes);
+        return directUrl;
+      }
+    }
+
+    // Chunked path for larger files (>25MB)
+    const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB binary slices
     const totalChunks = Math.max(1, Math.ceil(totalBytes / CHUNK_SIZE));
     const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -771,7 +844,14 @@ export function subscribeToLiveStore({
       return;
     }
 
-    const allDocs = Array.from(latestOutfitsMap.values());
+    const allDocs = Array.from(latestOutfitsMap.values()).map((item) => {
+      // Guarantee that any outfit in INITIAL_OUTFITS with a videoUrl preserves its videoUrl
+      const bundled = INITIAL_OUTFITS.find((b) => b.id === item.id);
+      if (bundled && bundled.videoUrl && !item.videoUrl) {
+        return { ...item, videoUrl: bundled.videoUrl };
+      }
+      return item;
+    });
     if (latestOutfitOrder && latestOutfitOrder.length > 0) {
       const orderMap = new Map<string, number>();
       latestOutfitOrder.forEach((id, idx) => orderMap.set(id, idx));

@@ -6,6 +6,7 @@ import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import heicConvert from 'heic-convert';
+import sharp from 'sharp';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getFirestore,
@@ -16,13 +17,71 @@ import {
   getDocs,
   query,
   orderBy,
+  disableNetwork,
+  setLogLevel,
 } from 'firebase/firestore';
 import firebaseConfig from './firebase-applet-config.json' with { type: 'json' };
+
+// Silence internal @firebase/firestore SDK logs (e.g. gRPC quota backoff)
+try {
+  setLogLevel('silent');
+} catch {
+  // ignore
+}
 
 const execFileAsync = promisify(execFile);
 const serverFirebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const serverDb = getFirestore(serverFirebaseApp, firebaseConfig.firestoreDatabaseId);
 const FIRESTORE_WRITE_TOKEN = 'lol-sanjeevani-studio-sync-v1';
+
+// Daily free tier quota resets at midnight US Pacific Time: 2026-10-06T08:00:00.000Z
+const KNOWN_QUOTA_RESET_TIMESTAMP = 1791273600000;
+let isServerFirestoreQuotaExhausted = Date.now() < KNOWN_QUOTA_RESET_TIMESTAMP;
+let serverQuotaExhaustedUntil = KNOWN_QUOTA_RESET_TIMESTAMP;
+
+if (isServerFirestoreQuotaExhausted) {
+  disableNetwork(serverDb).catch(() => {});
+}
+
+function isQuotaExhaustedError(err: unknown): boolean {
+  if (!err) return false;
+  const msg =
+    err instanceof Error
+      ? `${err.name} ${err.message} ${(err as { code?: string }).code || ''}`
+      : String(err);
+  return (
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('Quota limit exceeded') ||
+    msg.includes('Quota exceeded') ||
+    msg.includes("RPC 'Write'")
+  );
+}
+
+function tripServerQuotaCircuitBreaker(err: unknown) {
+  if (isQuotaExhaustedError(err)) {
+    isServerFirestoreQuotaExhausted = true;
+    serverQuotaExhaustedUntil = Math.max(KNOWN_QUOTA_RESET_TIMESTAMP, Date.now() + 24 * 60 * 60 * 1000);
+    disableNetwork(serverDb).catch(() => {});
+  }
+}
+
+async function runServerFirestoreWriteSafely(writeFn: () => Promise<void>): Promise<void> {
+  if (isServerFirestoreQuotaExhausted && Date.now() < serverQuotaExhaustedUntil) {
+    return;
+  }
+  isServerFirestoreQuotaExhausted = false;
+  try {
+    await Promise.race([
+      writeFn(),
+      new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error('resource-exhausted')), 2500)
+      ),
+    ]);
+  } catch (err) {
+    tripServerQuotaCircuitBreaker(err);
+  }
+}
 import { INITIAL_OUTFITS } from './src/data/initialOutfits.ts';
 import { INITIAL_TESTIMONIALS } from './src/data/initialTestimonials.ts';
 import { DEFAULT_SITE_SETTINGS } from './src/types.ts';
@@ -66,37 +125,45 @@ function loadMediaStore(): Record<string, string> {
   return {};
 }
 
-async function saveBufferToFirestoreMedia(filename: string, buf: Buffer, mimeType?: string): Promise<void> {
-  try {
-    const safeId = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const resolvedMime =
-      mimeType ||
-      (safeId.endsWith('.mp4')
-        ? 'video/mp4'
-        : safeId.endsWith('.webm')
-        ? 'video/webm'
-        : safeId.endsWith('.png')
-        ? 'image/png'
-        : 'image/webp');
-    const CHUNK_SIZE = 550 * 1024; // 550KB binary -> ~733KB base64 (under 900KB rule limit)
-    const totalChunks = Math.max(1, Math.ceil(buf.length / CHUNK_SIZE));
-    for (let idx = 0; idx < totalChunks; idx++) {
-      const slice = buf.subarray(idx * CHUNK_SIZE, Math.min(buf.length, (idx + 1) * CHUNK_SIZE));
-      await setDoc(doc(serverDb, 'media_assets', safeId, 'chunks', String(idx).padStart(5, '0')), {
-        index: idx,
-        data: slice.toString('base64'),
+function saveBufferToFirestoreMedia(filename: string, buf: Buffer, mimeType?: string): void {
+  // If Firestore quota is exhausted or disabled, skip writing chunks to prevent hitting the 20k free-tier daily write limit.
+  // Uploads are already safely stored on local disk in public/uploads/ and data/media-store.json.
+  if (isServerFirestoreQuotaExhausted) return;
+  setImmediate(() => {
+    void runServerFirestoreWriteSafely(async () => {
+      const safeId = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const resolvedMime =
+        mimeType ||
+        (safeId.endsWith('.mp4')
+          ? 'video/mp4'
+          : safeId.endsWith('.webm')
+          ? 'video/webm'
+          : safeId.endsWith('.png')
+          ? 'image/png'
+          : 'image/webp');
+      const CHUNK_SIZE = 550 * 1024; // 550KB binary -> ~733KB base64 (under 900KB rule limit)
+      const totalChunks = Math.max(1, Math.ceil(buf.length / CHUNK_SIZE));
+      
+      const chunkPromises: Promise<void>[] = [];
+      for (let idx = 0; idx < totalChunks; idx++) {
+        const slice = buf.subarray(idx * CHUNK_SIZE, Math.min(buf.length, (idx + 1) * CHUNK_SIZE));
+        chunkPromises.push(
+          setDoc(doc(serverDb, 'media_assets', safeId, 'chunks', String(idx).padStart(5, '0')), {
+            index: idx,
+            data: slice.toString('base64'),
+            writeToken: FIRESTORE_WRITE_TOKEN,
+          }).then(() => {})
+        );
+      }
+      await Promise.all(chunkPromises);
+      await setDoc(doc(serverDb, 'media_assets', safeId), {
+        mimeType: resolvedMime,
+        totalChunks,
+        createdAt: Date.now(),
         writeToken: FIRESTORE_WRITE_TOKEN,
       });
-    }
-    await setDoc(doc(serverDb, 'media_assets', safeId), {
-      mimeType: resolvedMime,
-      totalChunks,
-      createdAt: Date.now(),
-      writeToken: FIRESTORE_WRITE_TOKEN,
     });
-  } catch (err) {
-    console.warn('Firestore media backup skipped for', filename, err instanceof Error ? err.message : err);
-  }
+  });
 }
 
 const inflightFirestoreDownloads = new Map<string, Promise<Buffer | null>>();
@@ -133,17 +200,30 @@ async function loadBufferFromFirestoreMedia(filename: string): Promise<Buffer | 
   return promise;
 }
 
+let mediaStoreWriteTimer: NodeJS.Timeout | null = null;
+const pendingMediaStoreUpdates: Record<string, string> = {};
+
 function saveToMediaStore(filename: string, buf: Buffer) {
   try {
-    // Persist in Firestore media_assets so ais-dev and ais-pre share all uploaded photos & videos
-    void saveBufferToFirestoreMedia(filename, buf);
-    // Only persist files <= 6MB in media-store.json so workspace snapshots stay fast
+    // Persist in Firestore media_assets asynchronously so ais-dev and ais-pre share all uploaded photos & videos
+    saveBufferToFirestoreMedia(filename, buf);
+    // Only persist files <= 6MB in media-store.json
     if (buf.length > 6_500_000) return;
-    const store = loadMediaStore();
-    store[filename] = buf.toString('base64');
-    fs.writeFileSync(MEDIA_STORE_FILE, JSON.stringify(store), 'utf-8');
+    pendingMediaStoreUpdates[filename] = buf.toString('base64');
+    if (!mediaStoreWriteTimer) {
+      mediaStoreWriteTimer = setTimeout(() => {
+        mediaStoreWriteTimer = null;
+        try {
+          const store = loadMediaStore();
+          Object.assign(store, pendingMediaStoreUpdates);
+          fs.writeFileSync(MEDIA_STORE_FILE, JSON.stringify(store), 'utf-8');
+        } catch (err) {
+          console.error('Error writing media-store.json:', err);
+        }
+      }, 500);
+    }
   } catch (err) {
-    console.error('Error writing media-store.json:', err);
+    console.error('Error in saveToMediaStore:', err);
   }
 }
 
@@ -200,7 +280,23 @@ function loadTestimonials(): CustomerTestimonial[] {
 }
 
 function saveTestimonials(list: CustomerTestimonial[]) {
-  fs.writeFileSync(TESTIMONIALS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+  // Ensure all photos are saved to permanent public files and media store
+  const sanitized = list.map((item) => {
+    let photoUrl = String(item.photoUrl || '');
+    if (photoUrl.startsWith('data:')) {
+      photoUrl = saveBase64MediaToPublic(photoUrl, 'client-review');
+    }
+    return { ...item, photoUrl };
+  });
+
+  fs.writeFileSync(TESTIMONIALS_FILE, JSON.stringify(sanitized, null, 2), 'utf-8');
+  try {
+    const initialTestimonialsFile = path.join(__dirname, 'src', 'data', 'initialTestimonials.ts');
+    const tsContent = `import { CustomerTestimonial } from '../types';\n\nexport const INITIAL_TESTIMONIALS: CustomerTestimonial[] = ${JSON.stringify(sanitized, null, 2)};\n`;
+    fs.writeFileSync(initialTestimonialsFile, tsContent, 'utf-8');
+  } catch (err) {
+    console.error('Error syncing initialTestimonials.ts:', err);
+  }
 }
 
 function loadOutfits(): LehengaOutfit[] {
@@ -297,15 +393,14 @@ function loadBookings(): RentalBooking[] {
 
 function saveBookings(bookings: RentalBooking[]) {
   fs.writeFileSync(BOOKINGS_FILE, JSON.stringify(bookings, null, 2), 'utf-8');
-  try {
-    void setDoc(doc(serverDb, 'store_state', 'bookings'), {
+  if (isServerFirestoreQuotaExhausted) return;
+  void runServerFirestoreWriteSafely(async () => {
+    await setDoc(doc(serverDb, 'store_state', 'bookings'), {
       items: bookings,
       updatedAt: Date.now(),
       writeToken: FIRESTORE_WRITE_TOKEN,
     });
-  } catch (err) {
-    console.warn('Firestore bookings sync error:', err);
-  }
+  });
 }
 
 function isValidAdminPassword(pw?: string): boolean {
@@ -340,6 +435,62 @@ function saveBase64MediaToPublic(dataUrl: string, prefix = 'outfit'): string {
   fs.writeFileSync(filePath, buffer);
 
   return `/uploads/${filename}`;
+}
+
+async function processAndSaveImageBuffer(rawBuf: Buffer, targetWebpPath: string): Promise<void> {
+  try {
+    let inputBuf = rawBuf;
+    const header = rawBuf.subarray(4, 12).toString('ascii');
+    if (
+      header.includes('ftypheic') ||
+      header.includes('ftypmif1') ||
+      header.includes('ftypheix') ||
+      header.includes('ftyphevc')
+    ) {
+      try {
+        const jpegBuf = await heicConvert({
+          buffer: rawBuf,
+          format: 'JPEG',
+          quality: 0.95,
+        });
+        inputBuf = Buffer.from(jpegBuf);
+      } catch {
+        // sharp may handle directly
+      }
+    }
+
+    // sharp().rotate() with NO args reads EXIF Orientation tag (1-8) and automatically rotates pixels to upright portrait!
+    await sharp(inputBuf)
+      .rotate()
+      .resize({
+        width: 1400,
+        height: 2200,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .webp({ quality: 85 })
+      .toFile(targetWebpPath);
+  } catch (err) {
+    // Fallback: write buffer directly or use ffmpeg with autorotate
+    try {
+      const tempIn = `${targetWebpPath}.tmp.in`;
+      fs.writeFileSync(tempIn, rawBuf);
+      await execFileAsync('ffmpeg', [
+        '-y',
+        '-autorotate',
+        '-i',
+        tempIn,
+        '-vf',
+        "scale='min(1200,iw)':-2",
+        '-q:v',
+        '82',
+        targetWebpPath,
+      ]);
+      if (fs.existsSync(tempIn)) fs.unlinkSync(tempIn);
+    } catch {
+      fs.writeFileSync(targetWebpPath, rawBuf);
+    }
+  }
 }
 
 async function ensureBrowserCompatibleVideo(filePath: string): Promise<void> {
@@ -816,51 +967,23 @@ async function startServer() {
 
       if (isVideo) {
         fs.renameSync(tempPath, finalPath);
-        await ensureBrowserCompatibleVideo(finalPath);
+        void ensureBrowserCompatibleVideo(finalPath);
         if (fs.existsSync(finalPath)) {
           const finalBuf = fs.readFileSync(finalPath);
           saveToMediaStore(finalName, finalBuf);
-          await saveBufferToFirestoreMedia(finalName, finalBuf, 'video/mp4');
         }
         res.json({ ok: true, url: `/uploads/${finalName}` });
         return;
       }
 
-      if (isHeic) {
-        const heicBuf = fs.readFileSync(tempPath);
-        try {
-          fs.unlinkSync(tempPath);
-        } catch {
-          // ignore
-        }
-        const jpegBuf = await heicConvert({
-          buffer: heicBuf,
-          format: 'JPEG',
-          quality: 0.9,
-        });
-        fs.writeFileSync(tempPath, Buffer.from(jpegBuf));
-      }
-
-      try {
-        await execFileAsync('ffmpeg', [
-          '-y',
-          '-i',
-          tempPath,
-          '-vf',
-          "scale='min(1200,iw)':-2",
-          '-q:v',
-          '82',
-          finalPath,
-        ]);
-        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-      } catch {
-        fs.renameSync(tempPath, finalPath);
-      }
+      // Process image with sharp: auto-rotates EXIF orientation to true portrait and saves crisp WebP
+      const rawBuf = fs.readFileSync(tempPath);
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      await processAndSaveImageBuffer(rawBuf, finalPath);
 
       if (fs.existsSync(finalPath)) {
         const finalBuf = fs.readFileSync(finalPath);
         saveToMediaStore(finalName, finalBuf);
-        await saveBufferToFirestoreMedia(finalName, finalBuf, 'image/webp');
       }
       res.json({ ok: true, url: `/uploads/${finalName}` });
     } catch (err) {
@@ -868,7 +991,7 @@ async function startServer() {
     }
   });
 
-  // API: Direct Raw Binary Stream Upload (Zero FileReader / Base64 overhead)
+  // API: Direct Raw Binary Stream Upload (Zero FileReader / Base64 overhead, Auto EXIF Portrait Rotation)
   app.post(
     '/api/upload-binary',
     express.raw({ type: '*/*', limit: '250mb' }),
@@ -905,15 +1028,6 @@ async function startServer() {
             mime.includes('quicktime') ||
             /\.(mp4|mov|webm|m4v)$/i.test(lowerName));
 
-        if (isHeic) {
-          const jpegBuf = await heicConvert({
-            buffer: rawBuf,
-            format: 'JPEG',
-            quality: 0.9,
-          });
-          rawBuf = Buffer.from(jpegBuf);
-        }
-
         const ext = isVideo ? 'mp4' : 'webp';
         const baseStem = cleanOriginal.replace(/\.[^.]+$/, '').slice(0, 32) || 'media';
         const finalName = `${rawPrefix}-${Date.now()}_${baseStem}.${ext}`;
@@ -921,7 +1035,7 @@ async function startServer() {
 
         if (isVideo) {
           fs.writeFileSync(finalPath, rawBuf);
-          await ensureBrowserCompatibleVideo(finalPath);
+          void ensureBrowserCompatibleVideo(finalPath);
           if (fs.existsSync(finalPath)) {
             saveToMediaStore(finalName, fs.readFileSync(finalPath));
           }
@@ -929,24 +1043,8 @@ async function startServer() {
           return;
         }
 
-        // Image: write temp, convert to WebP via ffmpeg, save to UPLOADS_DIR + media-store.json
-        const tempImgPath = `${finalPath}.tmp`;
-        fs.writeFileSync(tempImgPath, rawBuf);
-        try {
-          await execFileAsync('ffmpeg', [
-            '-y',
-            '-i',
-            tempImgPath,
-            '-vf',
-            "scale='min(1200,iw)':-2",
-            '-q:v',
-            '82',
-            finalPath,
-          ]);
-          if (fs.existsSync(tempImgPath)) fs.unlinkSync(tempImgPath);
-        } catch {
-          fs.renameSync(tempImgPath, finalPath);
-        }
+        // Image: auto-rotate EXIF orientation to correct portrait and save WebP via sharp
+        await processAndSaveImageBuffer(rawBuf, finalPath);
 
         if (fs.existsSync(finalPath)) {
           saveToMediaStore(finalName, fs.readFileSync(finalPath));
@@ -957,6 +1055,39 @@ async function startServer() {
       }
     }
   );
+
+  // API: Rotate Image on disk (e.g. 90deg clockwise)
+  app.post('/api/rotate-image', async (req, res) => {
+    try {
+      const { url, degrees } = req.body;
+      if (!url || typeof url !== 'string') {
+        res.status(400).json({ error: 'Missing url' });
+        return;
+      }
+      const cleanUrl = url.replace(/^\/+/, '');
+      const diskPath = path.join(__dirname, 'public', cleanUrl);
+      if (!fs.existsSync(diskPath)) {
+        res.status(404).json({ error: 'Image not found' });
+        return;
+      }
+      const rot = Number(degrees) || 90;
+      const baseName = path.basename(diskPath).replace(/\.[^.]+$/, '');
+      const newName = `${baseName}-r${Date.now().toString(36).slice(-4)}.webp`;
+      const newPath = path.join(UPLOADS_DIR, newName);
+
+      const buf = fs.readFileSync(diskPath);
+      await sharp(buf)
+        .rotate(rot)
+        .webp({ quality: 85 })
+        .toFile(newPath);
+
+      const finalBuf = fs.readFileSync(newPath);
+      saveToMediaStore(newName, finalBuf);
+      res.json({ ok: true, url: `/uploads/${newName}` });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Rotation failed' });
+    }
+  });
 
   // API: Get & Update Site Settings (Top Logo, Bottom Logo, Hero Banner Video/Image, Brand Text)
   app.get('/api/settings', (_req, res) => {

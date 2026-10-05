@@ -68,11 +68,11 @@ export function resolvePublicVideoPath(rawSrc: string): string {
     return '/hero-poster.jpg';
   }
 
-  // Strip container-specific .run.app origin from /uploads/... so ais-dev and ais-pre share URLs
-  const runAppUploadsMatch = trimmed.match(/^https?:\/\/[^/]+\.run\.app(\/uploads\/.+)$/i);
+  // Strip container-specific .run.app origin from /uploads/... so ais-dev, ais-pre, and Vercel share URLs
+  const runAppUploadsMatch = trimmed.match(/^https?:\/\/[^/]+(\/uploads\/.+)$/i);
   if (runAppUploadsMatch) {
     const cleanUploadPath = runAppUploadsMatch[1].split('?')[0];
-    return `${cleanUploadPath}?v=h264`;
+    return cleanUploadPath;
   }
 
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
@@ -82,11 +82,8 @@ export function resolvePublicVideoPath(rawSrc: string): string {
   const cleaned = trimmed
     .replace(/^(\.\/)+/, '')
     .replace(/^public\//i, '')
-    .replace(/^\/+/, '');
-
-  if (cleaned.startsWith('uploads/') && /\.mp4$/i.test(cleaned)) {
-    return `/${cleaned}?v=h264`;
-  }
+    .replace(/^\/+/, '')
+    .split('?')[0];
 
   return `/${cleaned}`;
 }
