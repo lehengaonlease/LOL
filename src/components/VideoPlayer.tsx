@@ -91,8 +91,8 @@ export function resolvePublicVideoPath(rawSrc: string): string {
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   src,
   poster,
-  className = 'w-full h-full object-cover',
   fallbackSrc,
+  className = 'w-full h-full object-cover',
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [currentSrc, setCurrentSrc] = useState<string>(() => {
@@ -222,14 +222,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           resolveCloudMediaUrl(`cloud-media://${fileName}`).then((blobUrl) => {
             if (blobUrl && !blobUrl.startsWith('cloud-media://')) {
               setCurrentSrc(blobUrl);
+            } else if (fallbackSrc) {
+              setCurrentSrc(resolvePublicVideoPath(fallbackSrc));
             } else {
-              setCurrentSrc(fallbackSrc || '/lehenga-reel.mp4');
+              setCurrentSrc(getBundledVideoBlobUrl());
             }
-          }).catch(() => {
-            setCurrentSrc(fallbackSrc || '/lehenga-reel.mp4');
           });
+          return;
+        }
+        if (fallbackSrc) {
+          setCurrentSrc(resolvePublicVideoPath(fallbackSrc));
         } else {
-          setCurrentSrc(fallbackSrc || '/lehenga-reel.mp4');
+          setCurrentSrc(getBundledVideoBlobUrl());
         }
       }}
       className={className}

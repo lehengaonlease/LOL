@@ -104,7 +104,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           <VideoPlayer
             src={currentMedia.url}
             poster={outfit.mediaUrl || (Array.isArray(outfit.images) && outfit.images[0]) || undefined}
-            fallbackSrc="/lehenga-reel.mp4"
             className="w-full h-full object-cover object-top"
           />
         ) : (

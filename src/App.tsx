@@ -150,8 +150,10 @@ export function App() {
       if (saved !== null && localTs >= BUNDLED_CATALOG_UPDATED_AT) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Always preserve videoUrl from INITIAL_OUTFITS so videos are never lost
-          return parsed.map((item: LehengaOutfit) => {
+          const existingIds = new Set(parsed.map((o: LehengaOutfit) => o.id));
+          const missingFromInitial = INITIAL_OUTFITS.filter((o) => !existingIds.has(o.id));
+          const merged = missingFromInitial.length > 0 ? [...missingFromInitial, ...parsed] : parsed;
+          return merged.map((item: LehengaOutfit) => {
             const bundled = INITIAL_OUTFITS.find((b) => b.id === item.id);
             if (bundled && bundled.videoUrl && !item.videoUrl) {
               return { ...item, videoUrl: bundled.videoUrl };

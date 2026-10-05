@@ -34,13 +34,10 @@ export function resolveOptimizedImagePath(rawSrc?: string, isLogo = false): stri
     return trimmed;
   }
 
-  // On Vercel, resolve bundled catalog image immediately to avoid 404 network roundtrips
-  const isVercel = typeof window !== 'undefined' && window.location.hostname.includes('vercel.app');
-  if (isVercel) {
-    const bundled = getBundledCatalogImage(trimmed);
-    if (bundled) {
-      return bundled;
-    }
+  // 1. Direct memory lookup from bundled catalog media (instant in-memory WebP, 0 network latency)
+  const bundled = getBundledCatalogImage(trimmed);
+  if (bundled) {
+    return bundled;
   }
 
   // Only match the exact initial default logo files, NOT new uploads

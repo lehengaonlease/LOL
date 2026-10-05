@@ -233,7 +233,6 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
                         <div className="relative w-full h-full bg-[#2B180A]">
                           <VideoPlayer
                             src={item.url}
-                            fallbackSrc="/lehenga-reel.mp4"
                             className="w-full h-full object-cover object-top"
                           />
                           <div className="absolute inset-0 bg-black/30 flex flex-col items-center justify-center text-white">
@@ -277,7 +276,6 @@ export const LookbookModal: React.FC<LookbookModalProps> = ({
               {currentMedia.type === 'video' ? (
                 <VideoPlayer
                   src={currentMedia.url}
-                  fallbackSrc="/lehenga-reel.mp4"
                   className="w-full h-full object-cover object-top"
                 />
               ) : (

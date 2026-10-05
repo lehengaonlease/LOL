@@ -19,6 +19,7 @@ import {
   orderBy,
   disableNetwork,
   setLogLevel,
+  writeBatch,
 } from 'firebase/firestore';
 import firebaseConfig from './firebase-applet-config.json' with { type: 'json' };
 
@@ -34,7 +35,6 @@ const serverFirebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig)
 const serverDb = getFirestore(serverFirebaseApp, firebaseConfig.firestoreDatabaseId);
 const FIRESTORE_WRITE_TOKEN = 'lol-sanjeevani-studio-sync-v1';
 
-// Free tier quota protection: keep network alive for reads, handle write backoff gracefully
 let isServerFirestoreQuotaExhausted = false;
 let serverQuotaExhaustedUntil = 0;
 
@@ -56,7 +56,8 @@ function isQuotaExhaustedError(err: unknown): boolean {
 function tripServerQuotaCircuitBreaker(err: unknown) {
   if (isQuotaExhaustedError(err)) {
     isServerFirestoreQuotaExhausted = true;
-    serverQuotaExhaustedUntil = Date.now() + 5 * 60 * 1000;
+    serverQuotaExhaustedUntil = Date.now() + 24 * 60 * 60 * 1000;
+    disableNetwork(serverDb).catch(() => {});
   }
 }
 
@@ -66,14 +67,13 @@ async function runServerFirestoreWriteSafely(writeFn: () => Promise<void>): Prom
   }
   isServerFirestoreQuotaExhausted = false;
   try {
-    await Promise.race([
-      writeFn(),
-      new Promise<void>((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 4000)
-      ),
-    ]);
+    await writeFn();
   } catch (err) {
-    tripServerQuotaCircuitBreaker(err);
+    if (isQuotaExhaustedError(err)) {
+      tripServerQuotaCircuitBreaker(err);
+    } else {
+      console.warn('Server Firestore write warning:', err);
+    }
   }
 }
 import { INITIAL_OUTFITS } from './src/data/initialOutfits.ts';
@@ -120,6 +120,9 @@ function loadMediaStore(): Record<string, string> {
 }
 
 function saveBufferToFirestoreMedia(filename: string, buf: Buffer, mimeType?: string): void {
+  // If Firestore quota is exhausted or disabled, skip writing chunks to prevent hitting the 20k free-tier daily write limit.
+  // Uploads are already safely stored on local disk in public/uploads/ and data/media-store.json.
+  if (isServerFirestoreQuotaExhausted) return;
   setImmediate(() => {
     void runServerFirestoreWriteSafely(async () => {
       const safeId = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -132,19 +135,6 @@ function saveBufferToFirestoreMedia(filename: string, buf: Buffer, mimeType?: st
           : safeId.endsWith('.png')
           ? 'image/png'
           : 'image/webp');
-
-      // Fast-path for images <= 800KB: single document write
-      if (buf.length <= 800 * 1024) {
-        await setDoc(doc(serverDb, 'media_assets', safeId), {
-          mimeType: resolvedMime,
-          data: buf.toString('base64'),
-          totalChunks: 1,
-          createdAt: Date.now(),
-          writeToken: FIRESTORE_WRITE_TOKEN,
-        });
-        return;
-      }
-
       const CHUNK_SIZE = 550 * 1024; // 550KB binary -> ~733KB base64 (under 900KB rule limit)
       const totalChunks = Math.max(1, Math.ceil(buf.length / CHUNK_SIZE));
       
@@ -181,11 +171,6 @@ async function loadBufferFromFirestoreMedia(filename: string): Promise<Buffer | 
     try {
       const metaSnap = await getDoc(doc(serverDb, 'media_assets', safeId));
       if (!metaSnap.exists()) return null;
-      const data = metaSnap.data();
-      if (data && typeof data.data === 'string' && data.data.length > 0) {
-        return Buffer.from(data.data, 'base64');
-      }
-
       const chunksSnap = await getDocs(
         query(collection(serverDb, 'media_assets', safeId, 'chunks'), orderBy('index', 'asc'))
       );
@@ -313,7 +298,14 @@ function loadOutfits(): LehengaOutfit[] {
     if (fs.existsSync(CATALOG_FILE)) {
       const raw = fs.readFileSync(CATALOG_FILE, 'utf-8');
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const existingIds = new Set(parsed.map((o: LehengaOutfit) => o.id));
+        const missingFromInitial = INITIAL_OUTFITS.filter((o) => !existingIds.has(o.id));
+        if (missingFromInitial.length > 0) {
+          const merged = [...missingFromInitial, ...parsed];
+          saveOutfits(merged);
+          return merged;
+        }
         return parsed;
       }
     }
@@ -333,6 +325,48 @@ function saveOutfits(outfits: LehengaOutfit[]) {
   } catch (err) {
     console.error('Error syncing initialOutfits.ts:', err);
   }
+
+  void runServerFirestoreWriteSafely(async () => {
+    const nowTs = Date.now();
+    const batch = writeBatch(serverDb);
+    outfits.forEach((outfit, idx) => {
+      const rawImages =
+        Array.isArray(outfit.mediaUrls) && outfit.mediaUrls.length > 0
+          ? outfit.mediaUrls.map(String)
+          : Array.isArray(outfit.images)
+          ? outfit.images.map(String)
+          : [];
+      batch.set(doc(serverDb, 'outfits', outfit.id), {
+        id: String(outfit.id),
+        code: String(outfit.color || outfit.code || ''),
+        color: String(outfit.color || outfit.code || ''),
+        title: String(outfit.title || ''),
+        vibeCategory: String(outfit.vibeCategory || 'Navratri Ni Pehvesh'),
+        pricePerDay: Number(outfit.pricePerDay) || 0,
+        originalRetailPrice: 0,
+        description: String(outfit.description || ''),
+        ogHumorTagline: String(outfit.ogHumorTagline || ''),
+        mediaUrl: String(outfit.mediaUrl || rawImages[0] || ''),
+        mediaType: outfit.mediaType === 'video' ? 'video' : 'image',
+        mediaUrls: rawImages,
+        images: rawImages,
+        videoUrl: outfit.videoUrl || '',
+        sizes: Array.isArray(outfit.sizes) ? outfit.sizes.map(String) : [],
+        available: outfit.available !== false,
+        featured: false,
+        sortOrder: idx,
+        updatedAt: nowTs,
+        writeToken: FIRESTORE_WRITE_TOKEN,
+      });
+    });
+    batch.set(doc(serverDb, 'store_state', 'catalog_meta'), {
+      initialized: true,
+      outfitOrder: outfits.map((o) => o.id),
+      updatedAt: nowTs,
+      writeToken: FIRESTORE_WRITE_TOKEN,
+    });
+    await batch.commit();
+  });
   // Prune unreferenced lehenga-* uploads from media-store.json and public/uploads
   try {
     const referenced = new Set<string>();
