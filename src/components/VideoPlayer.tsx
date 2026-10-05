@@ -221,8 +221,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           resolveCloudMediaUrl(`cloud-media://${fileName}`).then((blobUrl) => {
             if (blobUrl && !blobUrl.startsWith('cloud-media://')) {
               setCurrentSrc(blobUrl);
+            } else {
+              setCurrentSrc(fallbackSrc || '/lehenga-reel.mp4');
             }
+          }).catch(() => {
+            setCurrentSrc(fallbackSrc || '/lehenga-reel.mp4');
           });
+        } else {
+          setCurrentSrc(fallbackSrc || '/lehenga-reel.mp4');
         }
       }}
       className={className}

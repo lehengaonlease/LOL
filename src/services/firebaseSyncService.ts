@@ -12,12 +12,12 @@ import {
   orderBy,
   setLogLevel,
   enableNetwork,
-  disableNetwork,
 } from 'firebase/firestore';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { LehengaOutfit, SiteSettings, CustomerTestimonial, RentalBooking } from '../types';
 import { INITIAL_OUTFITS, BUNDLED_CATALOG_UPDATED_AT } from '../data/initialOutfits';
+import { getBundledCatalogImage } from '../data/bundledCatalogMedia';
 import heic2any from 'heic2any';
 
 // Silence internal @firebase/firestore SDK console errors/warnings (e.g. free-tier quota backoff logs)
@@ -36,31 +36,10 @@ const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const storage = getStorage(app, firebaseConfig.storageBucket);
 
-// Daily free tier quota resets at midnight US Pacific Time: 2026-10-06T08:00:00.000Z
-const KNOWN_QUOTA_RESET_TIMESTAMP = 1791273600000;
+// Always ensure network is enabled for real-time reads & synchronization
+enableNetwork(db).catch(() => {});
 
-let isWriteQuotaExhausted = (() => {
-  if (Date.now() < KNOWN_QUOTA_RESET_TIMESTAMP) {
-    return true;
-  }
-  try {
-    const until = Number(
-      localStorage.getItem(QUOTA_EXHAUSTED_KEY) ||
-      sessionStorage.getItem(QUOTA_EXHAUSTED_KEY) ||
-      '0'
-    );
-    return until > Date.now();
-  } catch {
-    return false;
-  }
-})();
-
-if (isWriteQuotaExhausted) {
-  // Proactively disable Firestore network to shut down gRPC connections and eliminate RPC 'Write' stream errors
-  disableNetwork(db).catch(() => {});
-} else {
-  enableNetwork(db).catch(() => {});
-}
+let isWriteQuotaExhausted = false;
 
 let activeMutationsCount = 0;
 let lastEmittedOutfitsJson = '';
@@ -117,28 +96,26 @@ function tripWriteQuotaCircuitBreaker(err?: unknown) {
   if (!err || isQuotaError(err)) {
     isWriteQuotaExhausted = true;
     try {
-      const until = String(Math.max(KNOWN_QUOTA_RESET_TIMESTAMP, Date.now() + 24 * 60 * 60 * 1000));
-      localStorage.setItem(QUOTA_EXHAUSTED_KEY, until);
+      const until = String(Date.now() + 5 * 60 * 1000);
       sessionStorage.setItem(QUOTA_EXHAUSTED_KEY, until);
     } catch {
       // ignore
     }
-    // Shut down gRPC streams so Firestore stops throwing RPC 'Write' stream errors
-    disableNetwork(db).catch(() => {});
   }
 }
 
 async function runFirestoreWriteSafely(writeFn: () => Promise<void>): Promise<void> {
-  if (isWriteQuotaExhausted) return;
   try {
     await Promise.race([
       writeFn(),
       new Promise<void>((_, reject) =>
-        setTimeout(() => reject(new Error('resource-exhausted')), 2000)
+        setTimeout(() => reject(new Error('timeout')), 4000)
       ),
     ]);
   } catch (err) {
-    tripWriteQuotaCircuitBreaker(err);
+    if (isQuotaError(err)) {
+      tripWriteQuotaCircuitBreaker(err);
+    }
   }
 }
 
@@ -340,26 +317,78 @@ export async function uploadMediaToCloud(
       onProgress
     );
     if (binaryServerUrl) {
+      // Also persist to cloud Firestore media_assets asynchronously so Vercel & shared links have it
+      try {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const res = reader.result as string;
+          const base64 = res ? (res.includes(',') ? res.split(',')[1] : res) : '';
+          if (base64 && base64.length <= 1_200_000) {
+            void runFirestoreWriteSafely(async () => {
+              await setDoc(doc(db, 'media_assets', safeFileName), {
+                mimeType: contentType,
+                data: base64,
+                totalChunks: 1,
+                createdAt: Date.now(),
+                writeToken: WRITE_TOKEN,
+              });
+            });
+          }
+        };
+        reader.readAsDataURL(uploadBlob);
+      } catch {
+        // ignore
+      }
       return binaryServerUrl;
     }
 
-    // 2. Official Firebase Storage upload pipeline (`ref` -> `uploadBytesResumable` -> `getDownloadURL`)
-    if (!isStorageBucketUnavailable) {
-      const storagePath = `lehengas/${sanitizedPrefix}_${Date.now()}_${safeFileName}`;
-      try {
-        const storageRef = ref(storage, storagePath);
-        const uploadTask = uploadBytesResumable(storageRef, uploadBlob, { contentType });
-        uploadTask.on('state_changed', (snap) => {
-          onProgress?.(snap.bytesTransferred, snap.totalBytes);
+    // 2. Standalone cloud upload (for Vercel / serverless deployments without local Express storage)
+    const base64Data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const res = reader.result as string;
+        resolve(res ? (res.includes(',') ? res.split(',')[1] : res) : '');
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(uploadBlob);
+    });
+
+    if (base64Data) {
+      const cloudMediaUrl = `/uploads/${safeFileName}`;
+      // Fast single-document write for standard photos (<850KB binary -> ~1.1MB base64)
+      if (base64Data.length <= 1_150_000) {
+        await runFirestoreWriteSafely(async () => {
+          await setDoc(doc(db, 'media_assets', safeFileName), {
+            mimeType: contentType,
+            data: base64Data,
+            totalChunks: 1,
+            createdAt: Date.now(),
+            writeToken: WRITE_TOKEN,
+          });
         });
-        await uploadTask;
-        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-        if (downloadURL && downloadURL.startsWith('http')) {
-          return downloadURL;
-        }
-      } catch {
-        isStorageBucketUnavailable = true;
+      } else {
+        const CHUNK_SIZE = 600 * 1024;
+        const totalChunks = Math.ceil(base64Data.length / CHUNK_SIZE);
+        await runFirestoreWriteSafely(async () => {
+          const batch = writeBatch(db);
+          for (let i = 0; i < totalChunks; i++) {
+            const chunkSlice = base64Data.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+            batch.set(doc(db, 'media_assets', safeFileName, 'chunks', String(i).padStart(5, '0')), {
+              index: i,
+              data: chunkSlice,
+              writeToken: WRITE_TOKEN,
+            });
+          }
+          batch.set(doc(db, 'media_assets', safeFileName), {
+            mimeType: contentType,
+            totalChunks,
+            createdAt: Date.now(),
+            writeToken: WRITE_TOKEN,
+          });
+          await batch.commit();
+        });
       }
+      return cloudMediaUrl;
     }
 
     throw new Error('Failed to upload media file');
@@ -380,10 +409,16 @@ export function normalizeMediaUrl(url: string | undefined | null): string {
 
 /**
  * Resolves a `cloud-media://<assetId>` URI or a `/uploads/<filename>` URL into a playable/renderable Blob URL
- * by downloading and reassembling its chunks from Firestore `media_assets`.
+ * by checking bundled catalog media first, then downloading and reassembling from Firestore `media_assets`.
  */
 export async function resolveCloudMediaUrl(uri: string): Promise<string> {
   if (!uri) return uri;
+
+  // 1. Direct memory lookup from bundled catalog media
+  const bundled = getBundledCatalogImage(uri);
+  if (bundled) {
+    return bundled;
+  }
 
   let assetId = '';
   if (uri.startsWith('cloud-media://')) {
@@ -422,11 +457,21 @@ export async function resolveCloudMediaUrl(uri: string): Promise<string> {
       if (!metaSnap.exists()) {
         return uri;
       }
-      const { mimeType = targetId.endsWith('.mp4') ? 'video/mp4' : 'image/webp' } =
-        metaSnap.data() as {
-          mimeType?: string;
-          totalChunks?: number;
-        };
+      const metaData = metaSnap.data() as {
+        data?: string;
+        mimeType?: string;
+        totalChunks?: number;
+      };
+
+      // Fast-path: single document storage
+      if (metaData && typeof metaData.data === 'string' && metaData.data) {
+        const mimeType = metaData.mimeType || (targetId.endsWith('.mp4') ? 'video/mp4' : 'image/webp');
+        const dataUrl = metaData.data.startsWith('data:') ? metaData.data : `data:${mimeType};base64,${metaData.data}`;
+        resolvedMediaCache.set(cacheKey, dataUrl);
+        return dataUrl;
+      }
+
+      const { mimeType = targetId.endsWith('.mp4') ? 'video/mp4' : 'image/webp' } = metaData;
 
       const chunksQuery = query(
         collection(db, 'media_assets', targetId, 'chunks'),
@@ -834,24 +879,33 @@ export function subscribeToLiveStore({
       // When connected to the live Express server (ais-dev / ais-pre), /api/outfits is authoritative
       return;
     }
-    if (!catalogMetaLoaded || !outfitsCollectionLoaded) return;
-    if (latestOutfitsMap.size === 0 || activeMutationsCount > 0) return;
+    if (!outfitsCollectionLoaded) return;
+    if (activeMutationsCount > 0) return;
 
-    const minValidTimestamp = Math.max(getLocalCatalogTimestamp(), BUNDLED_CATALOG_UPDATED_AT);
-    if (latestMetaUpdatedAt < minValidTimestamp) {
-      // Firestore holds stale documents from before the daily write quota was reached;
-      // keep the newer bundled/server catalog instead of reverting to old drafts.
-      return;
+    // Start with all documents from Firestore
+    const firestoreDocs = Array.from(latestOutfitsMap.values());
+
+    // Merge with INITIAL_OUTFITS: ensure bundled outfits with videos and images are always preserved
+    const mergedMap = new Map<string, LehengaOutfit>();
+    for (const init of INITIAL_OUTFITS) {
+      mergedMap.set(init.id, { ...init });
+    }
+    for (const remote of firestoreDocs) {
+      const existing = mergedMap.get(remote.id);
+      if (existing) {
+        mergedMap.set(remote.id, {
+          ...existing,
+          ...remote,
+          videoUrl: remote.videoUrl || existing.videoUrl,
+          mediaUrls: (remote.mediaUrls && remote.mediaUrls.length > 0) ? remote.mediaUrls : existing.mediaUrls,
+          images: (remote.images && remote.images.length > 0) ? remote.images : existing.images,
+        });
+      } else {
+        mergedMap.set(remote.id, remote);
+      }
     }
 
-    const allDocs = Array.from(latestOutfitsMap.values()).map((item) => {
-      // Guarantee that any outfit in INITIAL_OUTFITS with a videoUrl preserves its videoUrl
-      const bundled = INITIAL_OUTFITS.find((b) => b.id === item.id);
-      if (bundled && bundled.videoUrl && !item.videoUrl) {
-        return { ...item, videoUrl: bundled.videoUrl };
-      }
-      return item;
-    });
+    const allDocs = Array.from(mergedMap.values());
     if (latestOutfitOrder && latestOutfitOrder.length > 0) {
       const orderMap = new Map<string, number>();
       latestOutfitOrder.forEach((id, idx) => orderMap.set(id, idx));

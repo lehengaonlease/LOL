@@ -34,14 +34,9 @@ const serverFirebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig)
 const serverDb = getFirestore(serverFirebaseApp, firebaseConfig.firestoreDatabaseId);
 const FIRESTORE_WRITE_TOKEN = 'lol-sanjeevani-studio-sync-v1';
 
-// Daily free tier quota resets at midnight US Pacific Time: 2026-10-06T08:00:00.000Z
-const KNOWN_QUOTA_RESET_TIMESTAMP = 1791273600000;
-let isServerFirestoreQuotaExhausted = Date.now() < KNOWN_QUOTA_RESET_TIMESTAMP;
-let serverQuotaExhaustedUntil = KNOWN_QUOTA_RESET_TIMESTAMP;
-
-if (isServerFirestoreQuotaExhausted) {
-  disableNetwork(serverDb).catch(() => {});
-}
+// Free tier quota protection: keep network alive for reads, handle write backoff gracefully
+let isServerFirestoreQuotaExhausted = false;
+let serverQuotaExhaustedUntil = 0;
 
 function isQuotaExhaustedError(err: unknown): boolean {
   if (!err) return false;
@@ -61,8 +56,7 @@ function isQuotaExhaustedError(err: unknown): boolean {
 function tripServerQuotaCircuitBreaker(err: unknown) {
   if (isQuotaExhaustedError(err)) {
     isServerFirestoreQuotaExhausted = true;
-    serverQuotaExhaustedUntil = Math.max(KNOWN_QUOTA_RESET_TIMESTAMP, Date.now() + 24 * 60 * 60 * 1000);
-    disableNetwork(serverDb).catch(() => {});
+    serverQuotaExhaustedUntil = Date.now() + 5 * 60 * 1000;
   }
 }
 
@@ -75,7 +69,7 @@ async function runServerFirestoreWriteSafely(writeFn: () => Promise<void>): Prom
     await Promise.race([
       writeFn(),
       new Promise<void>((_, reject) =>
-        setTimeout(() => reject(new Error('resource-exhausted')), 2500)
+        setTimeout(() => reject(new Error('timeout')), 4000)
       ),
     ]);
   } catch (err) {
@@ -126,9 +120,6 @@ function loadMediaStore(): Record<string, string> {
 }
 
 function saveBufferToFirestoreMedia(filename: string, buf: Buffer, mimeType?: string): void {
-  // If Firestore quota is exhausted or disabled, skip writing chunks to prevent hitting the 20k free-tier daily write limit.
-  // Uploads are already safely stored on local disk in public/uploads/ and data/media-store.json.
-  if (isServerFirestoreQuotaExhausted) return;
   setImmediate(() => {
     void runServerFirestoreWriteSafely(async () => {
       const safeId = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -141,6 +132,19 @@ function saveBufferToFirestoreMedia(filename: string, buf: Buffer, mimeType?: st
           : safeId.endsWith('.png')
           ? 'image/png'
           : 'image/webp');
+
+      // Fast-path for images <= 800KB: single document write
+      if (buf.length <= 800 * 1024) {
+        await setDoc(doc(serverDb, 'media_assets', safeId), {
+          mimeType: resolvedMime,
+          data: buf.toString('base64'),
+          totalChunks: 1,
+          createdAt: Date.now(),
+          writeToken: FIRESTORE_WRITE_TOKEN,
+        });
+        return;
+      }
+
       const CHUNK_SIZE = 550 * 1024; // 550KB binary -> ~733KB base64 (under 900KB rule limit)
       const totalChunks = Math.max(1, Math.ceil(buf.length / CHUNK_SIZE));
       
@@ -177,6 +181,11 @@ async function loadBufferFromFirestoreMedia(filename: string): Promise<Buffer | 
     try {
       const metaSnap = await getDoc(doc(serverDb, 'media_assets', safeId));
       if (!metaSnap.exists()) return null;
+      const data = metaSnap.data();
+      if (data && typeof data.data === 'string' && data.data.length > 0) {
+        return Buffer.from(data.data, 'base64');
+      }
+
       const chunksSnap = await getDocs(
         query(collection(serverDb, 'media_assets', safeId, 'chunks'), orderBy('index', 'asc'))
       );

@@ -4,6 +4,7 @@ import {
   BUNDLED_LEHENGA_IMG_1_DATA_URL,
   BUNDLED_LEHENGA_IMG_2_DATA_URL,
 } from '../data/bundledAssets';
+import { getBundledCatalogImage } from '../data/bundledCatalogMedia';
 import { resolveCloudMediaUrl } from '../services/firebaseSyncService';
 
 export interface OptimizedImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
@@ -16,8 +17,7 @@ export interface OptimizedImageProps extends React.ImgHTMLAttributes<HTMLImageEl
 
 /**
  * Global path resolver for images and logos in Vite + Vercel production builds.
- * Only maps the exact initial seed filenames to bundled data URLs so newly uploaded
- * images are never overwritten by the default yellow lehenga image.
+ * Integrates bundled catalog WebP data URLs for zero-fail rendering on Vercel.
  */
 export function resolveOptimizedImagePath(rawSrc?: string, isLogo = false): string {
   if (!rawSrc || !rawSrc.trim()) {
@@ -32,6 +32,15 @@ export function resolveOptimizedImagePath(rawSrc?: string, isLogo = false): stri
     trimmed.startsWith('cloud-media://')
   ) {
     return trimmed;
+  }
+
+  // On Vercel, resolve bundled catalog image immediately to avoid 404 network roundtrips
+  const isVercel = typeof window !== 'undefined' && window.location.hostname.includes('vercel.app');
+  if (isVercel) {
+    const bundled = getBundledCatalogImage(trimmed);
+    if (bundled) {
+      return bundled;
+    }
   }
 
   // Only match the exact initial default logo files, NOT new uploads
@@ -118,7 +127,14 @@ export const OptimizedImage: React.FC<OptimizedImageProps> = ({
     if (hasTriedFallback) return;
     setHasTriedFallback(true);
 
-    // If an /uploads/<fileName> image failed on this container, resolve directly from Firestore media_assets
+    // 1. Check bundled catalog image first (resolves immediately from memory)
+    const bundled = getBundledCatalogImage(currentSrc) || getBundledCatalogImage(src);
+    if (bundled) {
+      setCurrentSrc(bundled);
+      return;
+    }
+
+    // 2. If an /uploads/<fileName> image failed on this container, resolve directly from Firestore media_assets
     const uploadMatch = currentSrc.match(/\/uploads\/([^?#]+)/);
     if (uploadMatch && uploadMatch[1]) {
       const fileName = decodeURIComponent(uploadMatch[1]).replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -129,7 +145,11 @@ export const OptimizedImage: React.FC<OptimizedImageProps> = ({
           setCurrentSrc(resolveOptimizedImagePath(fallbackSrc, isLogo));
         } else if (isLogo) {
           setCurrentSrc(BUNDLED_LOGO_DATA_URL);
+        } else {
+          setCurrentSrc(BUNDLED_LEHENGA_IMG_1_DATA_URL);
         }
+      }).catch(() => {
+        setCurrentSrc(fallbackSrc ? resolveOptimizedImagePath(fallbackSrc, isLogo) : BUNDLED_LEHENGA_IMG_1_DATA_URL);
       });
       return;
     }
@@ -141,6 +161,8 @@ export const OptimizedImage: React.FC<OptimizedImageProps> = ({
 
     if (isLogo) {
       setCurrentSrc(BUNDLED_LOGO_DATA_URL);
+    } else {
+      setCurrentSrc(BUNDLED_LEHENGA_IMG_1_DATA_URL);
     }
   };
 
