@@ -264,9 +264,294 @@ async function uploadRawBinaryToServer(
   }
 }
 
+export interface MediaMetadata {
+  contentType: string;
+  orientation: 'portrait' | 'landscape' | 'square';
+  rotation: number;
+  width: number;
+  height: number;
+  aspectRatio: number;
+  isPortrait: boolean;
+  exifOrientation?: number;
+  originalName?: string;
+  durationSeconds?: number;
+}
+
 /**
- * Uploads a raw JavaScript File/Blob directly to Firebase Storage using the modular v9/v10+ SDK
- * (`ref`, `uploadBytesResumable`, `getDownloadURL`) and returns a permanent HTTPS URL.
+ * Extracts EXIF orientation tag (1-8) directly from JPEG binary ArrayBuffer.
+ * Tag 1: 0° (Normal)
+ * Tag 3: 180° (Upside down)
+ * Tag 6: 90° CW (Typical iPhone portrait)
+ * Tag 8: 270° CW / 90° CCW
+ */
+export function getExifOrientation(buffer: ArrayBuffer): number {
+  try {
+    const view = new DataView(buffer);
+    if (view.byteLength < 2 || view.getUint16(0, false) !== 0xffd8) {
+      return 1; // Not a JPEG
+    }
+    let offset = 2;
+    const length = view.byteLength;
+    while (offset < length) {
+      if (view.getUint8(offset) !== 0xff) return 1;
+      const marker = view.getUint8(offset + 1);
+      if (marker === 0xe1) {
+        // APP1 Marker (EXIF)
+        const exifLength = view.getUint16(offset + 2, false);
+        if (offset + 2 + exifLength > length) return 1;
+        // Check for 'Exif\0\0'
+        if (
+          view.getUint32(offset + 4, false) === 0x45786966 &&
+          view.getUint16(offset + 8, false) === 0x0000
+        ) {
+          const tiffOffset = offset + 10;
+          const isLittleEndian = view.getUint16(tiffOffset, false) === 0x4949;
+          const ifdOffset = view.getUint32(tiffOffset + 4, isLittleEndian);
+          const numEntries = view.getUint16(tiffOffset + ifdOffset, isLittleEndian);
+          for (let i = 0; i < numEntries; i++) {
+            const entryOffset = tiffOffset + ifdOffset + 2 + i * 12;
+            if (entryOffset + 12 > length) break;
+            const tag = view.getUint16(entryOffset, isLittleEndian);
+            if (tag === 0x0112) {
+              // Orientation tag
+              const orientation = view.getUint16(entryOffset + 8, isLittleEndian);
+              return orientation >= 1 && orientation <= 8 ? orientation : 1;
+            }
+          }
+        }
+        break;
+      } else if ((marker & 0xff00) !== 0xff00 && marker !== 0xd8 && marker !== 0xd9) {
+        offset += 2 + view.getUint16(offset + 2, false);
+      } else {
+        offset += 2;
+      }
+    }
+  } catch {
+    // Fallback to standard
+  }
+  return 1;
+}
+
+/**
+ * Normalizes an image File/Blob so pixels are physically rotated upright to prevent landscape-instead-of-portrait display.
+ * Computes exact width, height, rotation, and orientation metadata.
+ */
+export async function normalizeImageOrientation(
+  fileBlob: Blob,
+  fileName: string
+): Promise<{
+  blob: Blob;
+  metadata: MediaMetadata;
+}> {
+  try {
+    const arrayBuffer = await fileBlob.arrayBuffer();
+    const exifOrientation = getExifOrientation(arrayBuffer);
+
+    // Modern browsers support createImageBitmap with imageOrientation: 'from-image'
+    if (typeof createImageBitmap === 'function') {
+      try {
+        const bitmap = await createImageBitmap(fileBlob, { imageOrientation: 'from-image' });
+        const width = bitmap.width;
+        const height = bitmap.height;
+        const isPortrait = height >= width;
+        const orientation: 'portrait' | 'landscape' | 'square' =
+          height > width ? 'portrait' : width > height ? 'landscape' : 'square';
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(bitmap, 0, 0, width, height);
+          bitmap.close();
+
+          const targetMime = 'image/webp';
+          const normalizedBlob = await new Promise<Blob | null>((resolve) => {
+            canvas.toBlob((b) => resolve(b), targetMime, 0.9);
+          });
+
+          if (normalizedBlob) {
+            let rotation = 0;
+            if (exifOrientation === 6) rotation = 90;
+            else if (exifOrientation === 3) rotation = 180;
+            else if (exifOrientation === 8) rotation = 270;
+
+            return {
+              blob: normalizedBlob,
+              metadata: {
+                contentType: targetMime,
+                orientation,
+                rotation,
+                width,
+                height,
+                aspectRatio: width / height,
+                isPortrait,
+                exifOrientation,
+                originalName: fileName,
+              },
+            };
+          }
+        }
+      } catch {
+        // Fallback to HTMLImageElement
+      }
+    }
+
+    // Fallback: HTMLImageElement with EXIF rotation transforms
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(fileBlob);
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('Failed to load image for rotation'));
+      img.src = objectUrl;
+    });
+
+    let width = img.naturalWidth || img.width;
+    let height = img.naturalHeight || img.height;
+    let rotation = 0;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    // Handle EXIF orientation angles
+    if (exifOrientation === 6 || exifOrientation === 8) {
+      // 90 or 270 deg: Swap width and height so result is portrait
+      canvas.width = height;
+      canvas.height = width;
+      rotation = exifOrientation === 6 ? 90 : 270;
+    } else if (exifOrientation === 3) {
+      // 180 deg
+      canvas.width = width;
+      canvas.height = height;
+      rotation = 180;
+    } else {
+      canvas.width = width;
+      canvas.height = height;
+    }
+
+    if (ctx) {
+      ctx.save();
+      if (exifOrientation === 6) {
+        ctx.translate(canvas.width, 0);
+        ctx.rotate((90 * Math.PI) / 180);
+      } else if (exifOrientation === 8) {
+        ctx.translate(0, canvas.height);
+        ctx.rotate((270 * Math.PI) / 180);
+      } else if (exifOrientation === 3) {
+        ctx.translate(canvas.width, canvas.height);
+        ctx.rotate((180 * Math.PI) / 180);
+      }
+      ctx.drawImage(img, 0, 0);
+      ctx.restore();
+    }
+
+    URL.revokeObjectURL(objectUrl);
+
+    const targetMime = 'image/webp';
+    const normalizedBlob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((b) => resolve(b), targetMime, 0.9);
+    });
+
+    const finalWidth = canvas.width;
+    const finalHeight = canvas.height;
+    const isPortrait = finalHeight >= finalWidth;
+
+    return {
+      blob: normalizedBlob || fileBlob,
+      metadata: {
+        contentType: targetMime,
+        orientation: finalHeight > finalWidth ? 'portrait' : finalWidth > finalHeight ? 'landscape' : 'square',
+        rotation,
+        width: finalWidth,
+        height: finalHeight,
+        aspectRatio: finalWidth / finalHeight,
+        isPortrait,
+        exifOrientation,
+        originalName: fileName,
+      },
+    };
+  } catch (err) {
+    return {
+      blob: fileBlob,
+      metadata: {
+        contentType: fileBlob.type || 'image/jpeg',
+        orientation: 'portrait',
+        rotation: 0,
+        width: 1080,
+        height: 1920,
+        aspectRatio: 1080 / 1920,
+        isPortrait: true,
+        originalName: fileName,
+      },
+    };
+  }
+}
+
+/**
+ * Inspects video dimensions and metadata (orientation, width, height, duration)
+ */
+export async function extractVideoMetadata(videoBlob: Blob, fileName: string): Promise<MediaMetadata> {
+  return new Promise((resolve) => {
+    try {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      const objUrl = URL.createObjectURL(videoBlob);
+      video.src = objUrl;
+
+      const cleanup = () => {
+        URL.revokeObjectURL(objUrl);
+      };
+
+      video.onloadedmetadata = () => {
+        const width = video.videoWidth || 720;
+        const height = video.videoHeight || 1280;
+        const durationSeconds = Math.round(video.duration || 0);
+        const isPortrait = height >= width;
+        cleanup();
+        resolve({
+          contentType: videoBlob.type || 'video/mp4',
+          orientation: isPortrait ? 'portrait' : 'landscape',
+          rotation: 0,
+          width,
+          height,
+          aspectRatio: width / height,
+          isPortrait,
+          durationSeconds,
+          originalName: fileName,
+        });
+      };
+
+      video.onerror = () => {
+        cleanup();
+        resolve({
+          contentType: videoBlob.type || 'video/mp4',
+          orientation: 'portrait',
+          rotation: 0,
+          width: 720,
+          height: 1280,
+          aspectRatio: 720 / 1280,
+          isPortrait: true,
+          originalName: fileName,
+        });
+      };
+    } catch {
+      resolve({
+        contentType: videoBlob.type || 'video/mp4',
+        orientation: 'portrait',
+        rotation: 0,
+        width: 720,
+        height: 1280,
+        aspectRatio: 720 / 1280,
+        isPortrait: true,
+        originalName: fileName,
+      });
+    }
+  });
+}
+
+/**
+ * Uploads a raw JavaScript File/Blob directly to Firebase Storage bucket or server
+ * ensuring EXIF orientation/rotation metadata is inspected and normalized first.
  * Reports live MB progress via `onProgress(loadedBytes, totalBytes)`.
  */
 export async function uploadMediaToCloud(
@@ -282,6 +567,7 @@ export async function uploadMediaToCloud(
 
     const lowerName = safeFileName.toLowerCase();
     const lowerType = contentType.toLowerCase();
+    const isVideo = lowerType.startsWith('video/') || lowerName.endsWith('.mp4') || lowerName.endsWith('.mov');
     const isHeicFile =
       lowerType.includes('heic') ||
       lowerType.includes('heif') ||
@@ -290,7 +576,7 @@ export async function uploadMediaToCloud(
 
     onProgress?.(0, Math.max(1, file.size));
 
-    // Convert raw HEIC/HEIF Blob to standard JPEG Blob in binary form (no Base64)
+    // 1. Convert raw HEIC/HEIF Blob to standard JPEG Blob if needed
     if (isHeicFile) {
       try {
         const converted = await heic2any({
@@ -302,13 +588,75 @@ export async function uploadMediaToCloud(
         safeFileName = safeFileName.replace(/\.(heic|heif)$/i, '.jpg');
         contentType = 'image/jpeg';
       } catch {
-        // Server binary endpoint also handles HEIC buffer conversion if browser conversion fails
+        // Continue with raw blob
       }
+    }
+
+    // 2. Extract EXIF orientation and normalize pixel matrix so images stay upright in portrait
+    let mediaMeta: MediaMetadata;
+    if (!isVideo) {
+      const normalized = await normalizeImageOrientation(uploadBlob, safeFileName);
+      uploadBlob = normalized.blob;
+      mediaMeta = normalized.metadata;
+      contentType = mediaMeta.contentType || 'image/webp';
+      if (!safeFileName.endsWith('.webp') && !safeFileName.endsWith('.jpg') && !safeFileName.endsWith('.png')) {
+        safeFileName = `${safeFileName}.webp`;
+      }
+    } else {
+      mediaMeta = await extractVideoMetadata(uploadBlob, safeFileName);
+      contentType = mediaMeta.contentType || 'video/mp4';
     }
 
     const sanitizedPrefix = prefix.replace(/[^a-zA-Z0-9/_-]/g, '') || 'lehengas';
 
-    // 1. Primary: Stream binary chunks directly to live server with real-time XHR MB progress
+    // 3. Try Firebase Storage Bucket upload with customMetadata if available
+    if (!isStorageBucketUnavailable && firebaseConfig.storageBucket) {
+      try {
+        const storagePath = `${sanitizedPrefix}/${Date.now()}_${safeFileName}`;
+        const storageRef = ref(storage, storagePath);
+        const customMetadata: Record<string, string> = {
+          orientation: mediaMeta.orientation,
+          rotation: String(mediaMeta.rotation),
+          width: String(mediaMeta.width),
+          height: String(mediaMeta.height),
+          isPortrait: String(mediaMeta.isPortrait),
+          originalName: safeFileName,
+          uploadedAt: new Date().toISOString(),
+        };
+
+        const uploadTask = uploadBytesResumable(storageRef, uploadBlob, {
+          contentType,
+          customMetadata,
+        });
+
+        await new Promise<void>((resolve, reject) => {
+          uploadTask.on(
+            'state_changed',
+            (snapshot) => {
+              if (snapshot.totalBytes > 0) {
+                onProgress?.(snapshot.bytesTransferred, snapshot.totalBytes);
+              }
+            },
+            (error) => {
+              reject(error);
+            },
+            () => {
+              resolve();
+            }
+          );
+        });
+
+        const downloadUrl = await getDownloadURL(storageRef);
+        if (downloadUrl) {
+          return downloadUrl;
+        }
+      } catch {
+        // Storage bucket not provisioned or failed; seamlessly fallback to server and Firestore media
+        isStorageBucketUnavailable = true;
+      }
+    }
+
+    // 4. Fallback 1: Stream binary chunks directly to live server with real-time XHR MB progress
     const binaryServerUrl = await uploadRawBinaryToServer(
       uploadBlob,
       sanitizedPrefix,
@@ -329,6 +677,13 @@ export async function uploadMediaToCloud(
                 mimeType: contentType,
                 data: base64,
                 totalChunks: 1,
+                metadata: {
+                  orientation: mediaMeta.orientation,
+                  rotation: mediaMeta.rotation,
+                  width: mediaMeta.width,
+                  height: mediaMeta.height,
+                  isPortrait: mediaMeta.isPortrait,
+                },
                 createdAt: Date.now(),
                 writeToken: WRITE_TOKEN,
               });
@@ -342,7 +697,7 @@ export async function uploadMediaToCloud(
       return binaryServerUrl;
     }
 
-    // 2. Standalone cloud upload (for Vercel / serverless deployments without local Express storage)
+    // 5. Fallback 2: Standalone cloud upload (for Vercel / serverless deployments without local Express storage)
     const base64Data = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -362,6 +717,13 @@ export async function uploadMediaToCloud(
             mimeType: contentType,
             data: base64Data,
             totalChunks: 1,
+            metadata: {
+              orientation: mediaMeta.orientation,
+              rotation: mediaMeta.rotation,
+              width: mediaMeta.width,
+              height: mediaMeta.height,
+              isPortrait: mediaMeta.isPortrait,
+            },
             createdAt: Date.now(),
             writeToken: WRITE_TOKEN,
           });
@@ -382,6 +744,13 @@ export async function uploadMediaToCloud(
           batch.set(doc(db, 'media_assets', safeFileName), {
             mimeType: contentType,
             totalChunks,
+            metadata: {
+              orientation: mediaMeta.orientation,
+              rotation: mediaMeta.rotation,
+              width: mediaMeta.width,
+              height: mediaMeta.height,
+              isPortrait: mediaMeta.isPortrait,
+            },
             createdAt: Date.now(),
             writeToken: WRITE_TOKEN,
           });

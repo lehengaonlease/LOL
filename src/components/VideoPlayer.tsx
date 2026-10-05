@@ -92,6 +92,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   src,
   poster,
   className = 'w-full h-full object-cover',
+  fallbackSrc,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [currentSrc, setCurrentSrc] = useState<string>(() => {
