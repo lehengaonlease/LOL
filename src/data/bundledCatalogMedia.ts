@@ -27,7 +27,7 @@ export function getBundledCatalogImage(rawPath: string): string | undefined {
   const trimmed = rawPath.trim();
   const clean = trimmed.includes('/uploads/')
     ? trimmed.split('/uploads/')[1].split('?')[0].trim()
-    : trimmed.replace(/^/+/, '').split('?')[0].trim();
+    : trimmed.replace(/^\/+/, '').split('?')[0].trim();
   if (BUNDLED_CATALOG_IMAGES[clean]) return BUNDLED_CATALOG_IMAGES[clean];
   for (const [k, v] of Object.entries(BUNDLED_CATALOG_IMAGES)) {
     if (clean.includes(k) || k.includes(clean)) return v;

@@ -6,6 +6,7 @@ import {
   BUNDLED_VIDEO_MP4_BASE64,
 } from '../data/bundledAssets';
 import { resolveCloudMediaUrl } from '../services/firebaseSyncService';
+import { resolveOptimizedImagePath } from './OptimizedImage';
 
 export interface VideoPlayerProps {
   src: string;
@@ -100,7 +101,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return initial.startsWith('cloud-media://') ? '' : initial;
   });
   const [hasTriedCloudFallback, setHasTriedCloudFallback] = useState(false);
-  const resolvedPoster = poster ? resolvePublicVideoPath(poster) : undefined;
+  const resolvedPoster = poster ? resolveOptimizedImagePath(poster) : undefined;
 
   useEffect(() => {
     let active = true;

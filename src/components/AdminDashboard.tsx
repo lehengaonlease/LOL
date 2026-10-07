@@ -439,6 +439,8 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
         undefined,
         `Uploaded & synced Photo ${slotIdx + 1} for ${code}!`
       );
+    } catch (err) {
+      console.error('Photo upload error:', err);
     } finally {
       setUploadingSlot(null);
       setUploadProgressText('');
@@ -477,6 +479,8 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
         undefined,
         `Uploaded & synced ${urls.length} photo(s) for ${code}!`
       );
+    } catch (err) {
+      console.error('Batch upload error:', err);
     } finally {
       setUploadingSlot(null);
       setUploadProgressText('');
@@ -501,6 +505,8 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
         undefined,
         `Uploaded & synced primary looping Video for ${code}!`
       );
+    } catch (err) {
+      console.error('Video upload error:', err);
     } finally {
       setUploadingSlot(null);
       setUploadProgressText('');

@@ -12,12 +12,12 @@ import {
   orderBy,
   setLogLevel,
   enableNetwork,
-  disableNetwork,
 } from 'firebase/firestore';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { LehengaOutfit, SiteSettings, CustomerTestimonial, RentalBooking } from '../types';
 import { INITIAL_OUTFITS, BUNDLED_CATALOG_UPDATED_AT } from '../data/initialOutfits';
+import { getBundledCatalogImage } from '../data/bundledCatalogMedia';
 import heic2any from 'heic2any';
 
 // Silence internal @firebase/firestore SDK console errors/warnings (e.g. free-tier quota backoff logs)
@@ -36,28 +36,10 @@ const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const storage = getStorage(app, firebaseConfig.storageBucket);
 
-let isWriteQuotaExhausted = false;
-try {
-  const until = Number(
-    localStorage.getItem(QUOTA_EXHAUSTED_KEY) ||
-    sessionStorage.getItem(QUOTA_EXHAUSTED_KEY) ||
-    '0'
-  );
-  if (until > Date.now()) {
-    isWriteQuotaExhausted = true;
-  } else {
-    localStorage.removeItem(QUOTA_EXHAUSTED_KEY);
-    sessionStorage.removeItem(QUOTA_EXHAUSTED_KEY);
-  }
-} catch {
-  isWriteQuotaExhausted = false;
-}
+// Always ensure network is enabled for real-time reads & synchronization
+enableNetwork(db).catch(() => {});
 
-if (isWriteQuotaExhausted) {
-  disableNetwork(db).catch(() => {});
-} else {
-  enableNetwork(db).catch(() => {});
-}
+let isWriteQuotaExhausted = false;
 
 let activeMutationsCount = 0;
 let lastEmittedOutfitsJson = '';
@@ -111,28 +93,28 @@ function isQuotaError(err: unknown): boolean {
 }
 
 function tripWriteQuotaCircuitBreaker(err?: unknown) {
-  if (isQuotaError(err)) {
+  if (!err || isQuotaError(err)) {
     isWriteQuotaExhausted = true;
     try {
-      const until = String(Date.now() + 24 * 60 * 60 * 1000);
-      localStorage.setItem(QUOTA_EXHAUSTED_KEY, until);
+      const until = String(Date.now() + 5 * 60 * 1000);
       sessionStorage.setItem(QUOTA_EXHAUSTED_KEY, until);
     } catch {
       // ignore
     }
-    disableNetwork(db).catch(() => {});
   }
 }
 
 async function runFirestoreWriteSafely(writeFn: () => Promise<void>): Promise<void> {
-  if (isWriteQuotaExhausted) return;
   try {
-    await writeFn();
+    await Promise.race([
+      writeFn(),
+      new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 4000)
+      ),
+    ]);
   } catch (err) {
     if (isQuotaError(err)) {
       tripWriteQuotaCircuitBreaker(err);
-    } else {
-      console.warn('Firestore write warning:', err);
     }
   }
 }
@@ -282,9 +264,323 @@ async function uploadRawBinaryToServer(
   }
 }
 
+export interface MediaMetadata {
+  contentType: string;
+  orientation: 'portrait' | 'landscape' | 'square';
+  rotation: number;
+  width: number;
+  height: number;
+  aspectRatio: number;
+  isPortrait: boolean;
+  exifOrientation?: number;
+  originalName?: string;
+  durationSeconds?: number;
+}
+
 /**
- * Uploads a raw JavaScript File/Blob directly to Firebase Storage using the modular v9/v10+ SDK
- * (`ref`, `uploadBytesResumable`, `getDownloadURL`) and returns a permanent HTTPS URL.
+ * Extracts EXIF orientation tag (1-8) directly from JPEG binary ArrayBuffer.
+ * Tag 1: 0° (Normal)
+ * Tag 3: 180° (Upside down)
+ * Tag 6: 90° CW (Typical iPhone portrait)
+ * Tag 8: 270° CW / 90° CCW
+ */
+export function getExifOrientation(buffer: ArrayBuffer): number {
+  try {
+    const view = new DataView(buffer);
+    if (view.byteLength < 2 || view.getUint16(0, false) !== 0xffd8) {
+      return 1; // Not a JPEG
+    }
+    let offset = 2;
+    const length = view.byteLength;
+    while (offset < length) {
+      if (view.getUint8(offset) !== 0xff) return 1;
+      const marker = view.getUint8(offset + 1);
+      if (marker === 0xe1) {
+        // APP1 Marker (EXIF)
+        const exifLength = view.getUint16(offset + 2, false);
+        if (offset + 2 + exifLength > length) return 1;
+        // Check for 'Exif\0\0'
+        if (
+          view.getUint32(offset + 4, false) === 0x45786966 &&
+          view.getUint16(offset + 8, false) === 0x0000
+        ) {
+          const tiffOffset = offset + 10;
+          const isLittleEndian = view.getUint16(tiffOffset, false) === 0x4949;
+          const ifdOffset = view.getUint32(tiffOffset + 4, isLittleEndian);
+          const numEntries = view.getUint16(tiffOffset + ifdOffset, isLittleEndian);
+          for (let i = 0; i < numEntries; i++) {
+            const entryOffset = tiffOffset + ifdOffset + 2 + i * 12;
+            if (entryOffset + 12 > length) break;
+            const tag = view.getUint16(entryOffset, isLittleEndian);
+            if (tag === 0x0112) {
+              // Orientation tag
+              const orientation = view.getUint16(entryOffset + 8, isLittleEndian);
+              return orientation >= 1 && orientation <= 8 ? orientation : 1;
+            }
+          }
+        }
+        break;
+      } else if ((marker & 0xff00) !== 0xff00 && marker !== 0xd8 && marker !== 0xd9) {
+        offset += 2 + view.getUint16(offset + 2, false);
+      } else {
+        offset += 2;
+      }
+    }
+  } catch {
+    // Fallback to standard
+  }
+  return 1;
+}
+
+/**
+ * Normalizes an image File/Blob so pixels are physically rotated upright to prevent landscape-instead-of-portrait display.
+ * Computes exact width, height, rotation, and orientation metadata.
+ */
+export async function normalizeImageOrientation(
+  fileBlob: Blob,
+  fileName: string
+): Promise<{
+  blob: Blob;
+  metadata: MediaMetadata;
+}> {
+  try {
+    const arrayBuffer = await fileBlob.arrayBuffer();
+    const exifOrientation = getExifOrientation(arrayBuffer);
+
+    // Modern browsers support createImageBitmap with imageOrientation: 'from-image'
+    if (typeof createImageBitmap === 'function') {
+      try {
+        const bitmap = await createImageBitmap(fileBlob, { imageOrientation: 'from-image' });
+        const width = bitmap.width;
+        const height = bitmap.height;
+        const isPortrait = height >= width;
+        const orientation: 'portrait' | 'landscape' | 'square' =
+          height > width ? 'portrait' : width > height ? 'landscape' : 'square';
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(bitmap, 0, 0, width, height);
+          bitmap.close();
+
+          const targetMime = 'image/webp';
+          const normalizedBlob = await new Promise<Blob | null>((resolve) => {
+            canvas.toBlob((b) => resolve(b), targetMime, 0.9);
+          });
+
+          if (normalizedBlob) {
+            let rotation = 0;
+            if (exifOrientation === 6) rotation = 90;
+            else if (exifOrientation === 3) rotation = 180;
+            else if (exifOrientation === 8) rotation = 270;
+
+            return {
+              blob: normalizedBlob,
+              metadata: {
+                contentType: targetMime,
+                orientation,
+                rotation,
+                width,
+                height,
+                aspectRatio: width / height,
+                isPortrait,
+                exifOrientation,
+                originalName: fileName,
+              },
+            };
+          }
+        }
+      } catch {
+        // Fallback to HTMLImageElement
+      }
+    }
+
+    // Fallback: HTMLImageElement with EXIF rotation transforms
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(fileBlob);
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('Failed to load image for rotation'));
+      img.src = objectUrl;
+    });
+
+    let width = img.naturalWidth || img.width;
+    let height = img.naturalHeight || img.height;
+    let rotation = 0;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    // Handle EXIF orientation angles
+    if (exifOrientation === 6 || exifOrientation === 8) {
+      // 90 or 270 deg: Swap width and height so result is portrait
+      canvas.width = height;
+      canvas.height = width;
+      rotation = exifOrientation === 6 ? 90 : 270;
+    } else if (exifOrientation === 3) {
+      // 180 deg
+      canvas.width = width;
+      canvas.height = height;
+      rotation = 180;
+    } else {
+      canvas.width = width;
+      canvas.height = height;
+    }
+
+    if (ctx) {
+      ctx.save();
+      if (exifOrientation === 6) {
+        ctx.translate(canvas.width, 0);
+        ctx.rotate((90 * Math.PI) / 180);
+      } else if (exifOrientation === 8) {
+        ctx.translate(0, canvas.height);
+        ctx.rotate((270 * Math.PI) / 180);
+      } else if (exifOrientation === 3) {
+        ctx.translate(canvas.width, canvas.height);
+        ctx.rotate((180 * Math.PI) / 180);
+      }
+      ctx.drawImage(img, 0, 0);
+      ctx.restore();
+    }
+
+    URL.revokeObjectURL(objectUrl);
+
+    const targetMime = 'image/webp';
+    const normalizedBlob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((b) => resolve(b), targetMime, 0.9);
+    });
+
+    const finalWidth = canvas.width;
+    const finalHeight = canvas.height;
+    const isPortrait = finalHeight >= finalWidth;
+
+    return {
+      blob: normalizedBlob || fileBlob,
+      metadata: {
+        contentType: targetMime,
+        orientation: finalHeight > finalWidth ? 'portrait' : finalWidth > finalHeight ? 'landscape' : 'square',
+        rotation,
+        width: finalWidth,
+        height: finalHeight,
+        aspectRatio: finalWidth / finalHeight,
+        isPortrait,
+        exifOrientation,
+        originalName: fileName,
+      },
+    };
+  } catch (err) {
+    return {
+      blob: fileBlob,
+      metadata: {
+        contentType: fileBlob.type || 'image/jpeg',
+        orientation: 'portrait',
+        rotation: 0,
+        width: 1080,
+        height: 1920,
+        aspectRatio: 1080 / 1920,
+        isPortrait: true,
+        originalName: fileName,
+      },
+    };
+  }
+}
+
+/**
+ * Inspects video dimensions and metadata (orientation, width, height, duration)
+ */
+export async function extractVideoMetadata(videoBlob: Blob, fileName: string): Promise<MediaMetadata> {
+  return new Promise((resolve) => {
+    let resolved = false;
+    try {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      const objUrl = URL.createObjectURL(videoBlob);
+      video.src = objUrl;
+
+      const cleanup = () => {
+        try {
+          URL.revokeObjectURL(objUrl);
+        } catch {
+          // ignore
+        }
+      };
+
+      const timer = setTimeout(() => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+        resolve({
+          contentType: videoBlob.type || 'video/mp4',
+          orientation: 'portrait',
+          rotation: 0,
+          width: 720,
+          height: 1280,
+          aspectRatio: 720 / 1280,
+          isPortrait: true,
+          originalName: fileName,
+        });
+      }, 1500);
+
+      video.onloadedmetadata = () => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        const width = video.videoWidth || 720;
+        const height = video.videoHeight || 1280;
+        const durationSeconds = Math.round(video.duration || 0);
+        const isPortrait = height >= width;
+        cleanup();
+        resolve({
+          contentType: videoBlob.type || 'video/mp4',
+          orientation: isPortrait ? 'portrait' : 'landscape',
+          rotation: 0,
+          width,
+          height,
+          aspectRatio: width / height,
+          isPortrait,
+          durationSeconds,
+          originalName: fileName,
+        });
+      };
+
+      video.onerror = () => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        cleanup();
+        resolve({
+          contentType: videoBlob.type || 'video/mp4',
+          orientation: 'portrait',
+          rotation: 0,
+          width: 720,
+          height: 1280,
+          aspectRatio: 720 / 1280,
+          isPortrait: true,
+          originalName: fileName,
+        });
+      };
+    } catch {
+      if (resolved) return;
+      resolved = true;
+      resolve({
+        contentType: videoBlob.type || 'video/mp4',
+        orientation: 'portrait',
+        rotation: 0,
+        width: 720,
+        height: 1280,
+        aspectRatio: 720 / 1280,
+        isPortrait: true,
+        originalName: fileName,
+      });
+    }
+  });
+}
+
+/**
+ * Uploads a raw JavaScript File/Blob directly to Firebase Storage bucket or server
+ * ensuring EXIF orientation/rotation metadata is inspected and normalized first.
  * Reports live MB progress via `onProgress(loadedBytes, totalBytes)`.
  */
 export async function uploadMediaToCloud(
@@ -300,6 +596,7 @@ export async function uploadMediaToCloud(
 
     const lowerName = safeFileName.toLowerCase();
     const lowerType = contentType.toLowerCase();
+    const isVideo = lowerType.startsWith('video/') || lowerName.endsWith('.mp4') || lowerName.endsWith('.mov');
     const isHeicFile =
       lowerType.includes('heic') ||
       lowerType.includes('heif') ||
@@ -308,7 +605,7 @@ export async function uploadMediaToCloud(
 
     onProgress?.(0, Math.max(1, file.size));
 
-    // Convert raw HEIC/HEIF Blob to standard JPEG Blob in binary form (no Base64)
+    // 1. Convert raw HEIC/HEIF Blob to standard JPEG Blob if needed
     if (isHeicFile) {
       try {
         const converted = await heic2any({
@@ -320,13 +617,28 @@ export async function uploadMediaToCloud(
         safeFileName = safeFileName.replace(/\.(heic|heif)$/i, '.jpg');
         contentType = 'image/jpeg';
       } catch {
-        // Server binary endpoint also handles HEIC buffer conversion if browser conversion fails
+        // Continue with raw blob
       }
+    }
+
+    // 2. Extract EXIF orientation and normalize pixel matrix so images stay upright in portrait
+    let mediaMeta: MediaMetadata;
+    if (!isVideo) {
+      const normalized = await normalizeImageOrientation(uploadBlob, safeFileName);
+      uploadBlob = normalized.blob;
+      mediaMeta = normalized.metadata;
+      contentType = mediaMeta.contentType || 'image/webp';
+      if (!safeFileName.endsWith('.webp') && !safeFileName.endsWith('.jpg') && !safeFileName.endsWith('.png')) {
+        safeFileName = `${safeFileName}.webp`;
+      }
+    } else {
+      mediaMeta = await extractVideoMetadata(uploadBlob, safeFileName);
+      contentType = mediaMeta.contentType || 'video/mp4';
     }
 
     const sanitizedPrefix = prefix.replace(/[^a-zA-Z0-9/_-]/g, '') || 'lehengas';
 
-    // 1. Primary: Stream binary chunks directly to live server with real-time XHR MB progress
+    // 3. Primary: Stream binary directly to the live server (/api/upload-binary or /api/upload-binary-chunk)
     const binaryServerUrl = await uploadRawBinaryToServer(
       uploadBlob,
       sanitizedPrefix,
@@ -335,26 +647,150 @@ export async function uploadMediaToCloud(
       onProgress
     );
     if (binaryServerUrl) {
+      // Also persist to cloud Firestore media_assets asynchronously so Vercel & shared links have it
+      try {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const res = reader.result as string;
+          const base64 = res ? (res.includes(',') ? res.split(',')[1] : res) : '';
+          if (base64 && base64.length <= 1_200_000) {
+            void runFirestoreWriteSafely(async () => {
+              await setDoc(doc(db, 'media_assets', safeFileName), {
+                mimeType: contentType,
+                data: base64,
+                totalChunks: 1,
+                metadata: {
+                  orientation: mediaMeta.orientation,
+                  rotation: mediaMeta.rotation,
+                  width: mediaMeta.width,
+                  height: mediaMeta.height,
+                  isPortrait: mediaMeta.isPortrait,
+                },
+                createdAt: Date.now(),
+                writeToken: WRITE_TOKEN,
+              });
+            });
+          }
+        };
+        reader.readAsDataURL(uploadBlob);
+      } catch {
+        // ignore
+      }
       return binaryServerUrl;
     }
 
-    // 2. Official Firebase Storage upload pipeline (`ref` -> `uploadBytesResumable` -> `getDownloadURL`)
-    if (!isStorageBucketUnavailable) {
-      const storagePath = `lehengas/${sanitizedPrefix}_${Date.now()}_${safeFileName}`;
+    // 4. Fallback for serverless/static environments: Try Firebase Storage with 4s timeout
+    if (!isStorageBucketUnavailable && firebaseConfig.storageBucket) {
       try {
+        const storagePath = `${sanitizedPrefix}/${Date.now()}_${safeFileName}`;
         const storageRef = ref(storage, storagePath);
-        const uploadTask = uploadBytesResumable(storageRef, uploadBlob, { contentType });
-        uploadTask.on('state_changed', (snap) => {
-          onProgress?.(snap.bytesTransferred, snap.totalBytes);
+        const customMetadata: Record<string, string> = {
+          orientation: mediaMeta.orientation,
+          rotation: String(mediaMeta.rotation),
+          width: String(mediaMeta.width),
+          height: String(mediaMeta.height),
+          isPortrait: String(mediaMeta.isPortrait),
+          originalName: safeFileName,
+          uploadedAt: new Date().toISOString(),
+        };
+
+        const uploadTask = uploadBytesResumable(storageRef, uploadBlob, {
+          contentType,
+          customMetadata,
         });
-        await uploadTask;
-        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-        if (downloadURL && downloadURL.startsWith('http')) {
-          return downloadURL;
+
+        await Promise.race([
+          new Promise<void>((resolve, reject) => {
+            uploadTask.on(
+              'state_changed',
+              (snapshot) => {
+                if (snapshot.totalBytes > 0) {
+                  onProgress?.(snapshot.bytesTransferred, snapshot.totalBytes);
+                }
+              },
+              (error) => {
+                reject(error);
+              },
+              () => {
+                resolve();
+              }
+            );
+          }),
+          new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error('Storage upload timeout')), 4000)
+          ),
+        ]);
+
+        const downloadUrl = await getDownloadURL(storageRef);
+        if (downloadUrl) {
+          return downloadUrl;
         }
       } catch {
         isStorageBucketUnavailable = true;
       }
+    }
+
+    // 5. Fallback 2: Standalone cloud upload (for Vercel / serverless deployments without local Express storage)
+    const base64Data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const res = reader.result as string;
+        resolve(res ? (res.includes(',') ? res.split(',')[1] : res) : '');
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(uploadBlob);
+    });
+
+    if (base64Data) {
+      const cloudMediaUrl = `/uploads/${safeFileName}`;
+      // Fast single-document write for standard photos (<850KB binary -> ~1.1MB base64)
+      if (base64Data.length <= 1_150_000) {
+        await runFirestoreWriteSafely(async () => {
+          await setDoc(doc(db, 'media_assets', safeFileName), {
+            mimeType: contentType,
+            data: base64Data,
+            totalChunks: 1,
+            metadata: {
+              orientation: mediaMeta.orientation,
+              rotation: mediaMeta.rotation,
+              width: mediaMeta.width,
+              height: mediaMeta.height,
+              isPortrait: mediaMeta.isPortrait,
+            },
+            createdAt: Date.now(),
+            writeToken: WRITE_TOKEN,
+          });
+        });
+      } else {
+        const CHUNK_SIZE = 600 * 1024;
+        const totalChunks = Math.ceil(base64Data.length / CHUNK_SIZE);
+        await runFirestoreWriteSafely(async () => {
+          const batch = writeBatch(db);
+          for (let i = 0; i < totalChunks; i++) {
+            const chunkSlice = base64Data.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+            batch.set(doc(db, 'media_assets', safeFileName, 'chunks', String(i).padStart(5, '0')), {
+              index: i,
+              data: chunkSlice,
+              writeToken: WRITE_TOKEN,
+            });
+          }
+          batch.set(doc(db, 'media_assets', safeFileName), {
+            mimeType: contentType,
+            totalChunks,
+            metadata: {
+              orientation: mediaMeta.orientation,
+              rotation: mediaMeta.rotation,
+              width: mediaMeta.width,
+              height: mediaMeta.height,
+              isPortrait: mediaMeta.isPortrait,
+            },
+            createdAt: Date.now(),
+            writeToken: WRITE_TOKEN,
+          });
+          await batch.commit();
+        });
+      }
+      return cloudMediaUrl;
     }
 
     throw new Error('Failed to upload media file');
@@ -375,10 +811,16 @@ export function normalizeMediaUrl(url: string | undefined | null): string {
 
 /**
  * Resolves a `cloud-media://<assetId>` URI or a `/uploads/<filename>` URL into a playable/renderable Blob URL
- * by downloading and reassembling its chunks from Firestore `media_assets`.
+ * by checking bundled catalog media first, then downloading and reassembling from Firestore `media_assets`.
  */
 export async function resolveCloudMediaUrl(uri: string): Promise<string> {
   if (!uri) return uri;
+
+  // 1. Direct memory lookup from bundled catalog media
+  const bundled = getBundledCatalogImage(uri);
+  if (bundled) {
+    return bundled;
+  }
 
   let assetId = '';
   if (uri.startsWith('cloud-media://')) {
@@ -417,11 +859,21 @@ export async function resolveCloudMediaUrl(uri: string): Promise<string> {
       if (!metaSnap.exists()) {
         return uri;
       }
-      const { mimeType = targetId.endsWith('.mp4') ? 'video/mp4' : 'image/webp' } =
-        metaSnap.data() as {
-          mimeType?: string;
-          totalChunks?: number;
-        };
+      const metaData = metaSnap.data() as {
+        data?: string;
+        mimeType?: string;
+        totalChunks?: number;
+      };
+
+      // Fast-path: single document storage
+      if (metaData && typeof metaData.data === 'string' && metaData.data) {
+        const mimeType = metaData.mimeType || (targetId.endsWith('.mp4') ? 'video/mp4' : 'image/webp');
+        const dataUrl = metaData.data.startsWith('data:') ? metaData.data : `data:${mimeType};base64,${metaData.data}`;
+        resolvedMediaCache.set(cacheKey, dataUrl);
+        return dataUrl;
+      }
+
+      const { mimeType = targetId.endsWith('.mp4') ? 'video/mp4' : 'image/webp' } = metaData;
 
       const chunksQuery = query(
         collection(db, 'media_assets', targetId, 'chunks'),
@@ -829,27 +1281,59 @@ export function subscribeToLiveStore({
       // When connected to the live Express server (ais-dev / ais-pre), /api/outfits is authoritative
       return;
     }
-    if (!catalogMetaLoaded || !outfitsCollectionLoaded) return;
-    if (latestOutfitsMap.size === 0 || activeMutationsCount > 0) return;
+    if (!outfitsCollectionLoaded) return;
+    if (activeMutationsCount > 0) return;
 
-    const minValidTimestamp = Math.max(getLocalCatalogTimestamp(), BUNDLED_CATALOG_UPDATED_AT);
-    if (latestMetaUpdatedAt < minValidTimestamp) {
-      // Firestore holds stale documents from before the daily write quota was reached;
-      // keep the newer bundled/server catalog instead of reverting to old drafts.
-      return;
+    // Start with all documents from Firestore
+    const firestoreDocs = Array.from(latestOutfitsMap.values());
+
+    // Merge with INITIAL_OUTFITS: ensure bundled outfits with videos and images are always preserved
+    const mergedMap = new Map<string, LehengaOutfit>();
+    for (const init of INITIAL_OUTFITS) {
+      mergedMap.set(init.id, { ...init });
+    }
+    for (const remote of firestoreDocs) {
+      // Ignore junk/dummy test placeholders
+      if (
+        !remote.id ||
+        remote.title.startsWith('New Designer Lehenga') ||
+        remote.mediaUrl.includes('lehenga-orange-zardosi.jpg') ||
+        remote.id === 'lol-custom-1791134547516' ||
+        remote.id === 'lol-custom-1791134551908' ||
+        remote.id === 'lol-custom-1791134555912' ||
+        remote.id === 'lol-custom-1791134706855' ||
+        remote.id === 'lol-custom-1791193889979'
+      ) {
+        continue;
+      }
+      const existing = mergedMap.get(remote.id);
+      if (existing) {
+        // Only override bundled outfit if remote has valid media and is newer than bundled timestamp
+        const remoteUpdated = remote.updatedAt || 0;
+        if (remoteUpdated > BUNDLED_CATALOG_UPDATED_AT) {
+          mergedMap.set(remote.id, {
+            ...existing,
+            ...remote,
+            videoUrl: remote.videoUrl || existing.videoUrl,
+            mediaUrls: (remote.mediaUrls && remote.mediaUrls.length > 0) ? remote.mediaUrls : existing.mediaUrls,
+            images: (remote.images && remote.images.length > 0) ? remote.images : existing.images,
+          });
+        }
+      } else {
+        mergedMap.set(remote.id, remote);
+      }
     }
 
-    const allDocs = Array.from(latestOutfitsMap.values()).map((item) => {
-      // Guarantee that any outfit in INITIAL_OUTFITS with a videoUrl preserves its videoUrl
-      const bundled = INITIAL_OUTFITS.find((b) => b.id === item.id);
-      if (bundled && bundled.videoUrl && !item.videoUrl) {
-        return { ...item, videoUrl: bundled.videoUrl };
-      }
-      return item;
-    });
-    if (latestOutfitOrder && latestOutfitOrder.length > 0) {
+    const allDocs = Array.from(mergedMap.values());
+    const validOrder = (latestOutfitOrder || []).filter(
+      (id) =>
+        mergedMap.has(id) &&
+        !id.startsWith('lol-custom-1791134') &&
+        id !== 'lol-custom-1791193889979'
+    );
+    if (validOrder.length > 0) {
       const orderMap = new Map<string, number>();
-      latestOutfitOrder.forEach((id, idx) => orderMap.set(id, idx));
+      validOrder.forEach((id, idx) => orderMap.set(id, idx));
       allDocs.sort((a, b) => {
         const idxA = orderMap.has(a.id) ? orderMap.get(a.id)! : (a.sortOrder ?? 9999);
         const idxB = orderMap.has(b.id) ? orderMap.get(b.id)! : (b.sortOrder ?? 9999);
