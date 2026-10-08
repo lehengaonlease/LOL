@@ -494,6 +494,14 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
     if (!file) return;
     setUploadingSlot('video');
     trackCardProgress(0, file.size);
+    let localPreview = '';
+    try {
+      localPreview = URL.createObjectURL(file);
+      setVideoUrl(localPreview);
+      setActiveMediaIndex(0);
+    } catch {
+      // ignore
+    }
     try {
       const url = await handleMediaUpload(file, `${outfit.id}-video`, trackCardProgress);
       latestVideoRef.current = url;
@@ -507,7 +515,15 @@ const EditableGridCard: React.FC<EditableGridCardProps> = ({
       );
     } catch (err) {
       console.error('Video upload error:', err);
+      setVideoUrl(latestVideoRef.current);
     } finally {
+      if (localPreview) {
+        try {
+          URL.revokeObjectURL(localPreview);
+        } catch {
+          // ignore
+        }
+      }
       setUploadingSlot(null);
       setUploadProgressText('');
       setUploadPercent(0);

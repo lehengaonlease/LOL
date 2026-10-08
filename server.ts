@@ -48,16 +48,14 @@ function isQuotaExhaustedError(err: unknown): boolean {
     msg.includes('RESOURCE_EXHAUSTED') ||
     msg.includes('resource-exhausted') ||
     msg.includes('Quota limit exceeded') ||
-    msg.includes('Quota exceeded') ||
-    msg.includes("RPC 'Write'")
+    msg.includes('Quota exceeded')
   );
 }
 
 function tripServerQuotaCircuitBreaker(err: unknown) {
   if (isQuotaExhaustedError(err)) {
     isServerFirestoreQuotaExhausted = true;
-    serverQuotaExhaustedUntil = Date.now() + 24 * 60 * 60 * 1000;
-    disableNetwork(serverDb).catch(() => {});
+    serverQuotaExhaustedUntil = Date.now() + 15 * 1000; // brief 15s pause only
   }
 }
 
@@ -120,9 +118,6 @@ function loadMediaStore(): Record<string, string> {
 }
 
 function saveBufferToFirestoreMedia(filename: string, buf: Buffer, mimeType?: string): void {
-  // If Firestore quota is exhausted or disabled, skip writing chunks to prevent hitting the 20k free-tier daily write limit.
-  // Uploads are already safely stored on local disk in public/uploads/ and data/media-store.json.
-  if (isServerFirestoreQuotaExhausted) return;
   setImmediate(() => {
     void runServerFirestoreWriteSafely(async () => {
       const safeId = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -137,25 +132,48 @@ function saveBufferToFirestoreMedia(filename: string, buf: Buffer, mimeType?: st
           : 'image/webp');
       const CHUNK_SIZE = 550 * 1024; // 550KB binary -> ~733KB base64 (under 900KB rule limit)
       const totalChunks = Math.max(1, Math.ceil(buf.length / CHUNK_SIZE));
-      
-      const chunkPromises: Promise<void>[] = [];
-      for (let idx = 0; idx < totalChunks; idx++) {
-        const slice = buf.subarray(idx * CHUNK_SIZE, Math.min(buf.length, (idx + 1) * CHUNK_SIZE));
-        chunkPromises.push(
-          setDoc(doc(serverDb, 'media_assets', safeId, 'chunks', String(idx).padStart(5, '0')), {
-            index: idx,
-            data: slice.toString('base64'),
-            writeToken: FIRESTORE_WRITE_TOKEN,
-          }).then(() => {})
-        );
+
+      // Fast-path for single chunk (<550KB): store directly in parent document
+      if (totalChunks === 1) {
+        await setDoc(doc(serverDb, 'media_assets', safeId), {
+          mimeType: resolvedMime,
+          data: buf.toString('base64'),
+          totalChunks: 1,
+          createdAt: Date.now(),
+          writeToken: FIRESTORE_WRITE_TOKEN,
+        });
+        return;
       }
-      await Promise.all(chunkPromises);
+
       await setDoc(doc(serverDb, 'media_assets', safeId), {
         mimeType: resolvedMime,
         totalChunks,
         createdAt: Date.now(),
         writeToken: FIRESTORE_WRITE_TOKEN,
       });
+
+      // Write chunks in paced batches of 2 to avoid bursting Firestore connection
+      for (let idx = 0; idx < totalChunks; idx += 2) {
+        const slice1 = buf.subarray(idx * CHUNK_SIZE, Math.min(buf.length, (idx + 1) * CHUNK_SIZE));
+        const p1 = setDoc(doc(serverDb, 'media_assets', safeId, 'chunks', String(idx).padStart(5, '0')), {
+          index: idx,
+          data: slice1.toString('base64'),
+          writeToken: FIRESTORE_WRITE_TOKEN,
+        });
+        let p2: Promise<unknown> = Promise.resolve();
+        if (idx + 1 < totalChunks) {
+          const slice2 = buf.subarray((idx + 1) * CHUNK_SIZE, Math.min(buf.length, (idx + 2) * CHUNK_SIZE));
+          p2 = setDoc(doc(serverDb, 'media_assets', safeId, 'chunks', String(idx + 1).padStart(5, '0')), {
+            index: idx + 1,
+            data: slice2.toString('base64'),
+            writeToken: FIRESTORE_WRITE_TOKEN,
+          });
+        }
+        await Promise.all([p1, p2]);
+        if (idx + 2 < totalChunks) {
+          await new Promise((r) => setTimeout(r, 25));
+        }
+      }
     });
   });
 }
@@ -171,6 +189,12 @@ async function loadBufferFromFirestoreMedia(filename: string): Promise<Buffer | 
     try {
       const metaSnap = await getDoc(doc(serverDb, 'media_assets', safeId));
       if (!metaSnap.exists()) return null;
+      const metaData = metaSnap.data();
+      // If single-document data exists:
+      if (metaData && typeof metaData.data === 'string' && metaData.data.length > 0) {
+        return Buffer.from(metaData.data, 'base64');
+      }
+
       const chunksSnap = await getDocs(
         query(collection(serverDb, 'media_assets', safeId, 'chunks'), orderBy('index', 'asc'))
       );
@@ -201,8 +225,8 @@ function saveToMediaStore(filename: string, buf: Buffer) {
   try {
     // Persist in Firestore media_assets asynchronously so ais-dev and ais-pre share all uploaded photos & videos
     saveBufferToFirestoreMedia(filename, buf);
-    // Only persist files <= 6MB in media-store.json
-    if (buf.length > 6_500_000) return;
+    // Only persist files <= 12MB in media-store.json (covers compressed videos)
+    if (buf.length > 12_000_000) return;
     pendingMediaStoreUpdates[filename] = buf.toString('base64');
     if (!mediaStoreWriteTimer) {
       mediaStoreWriteTimer = setTimeout(() => {
@@ -290,6 +314,71 @@ function saveTestimonials(list: CustomerTestimonial[]) {
     fs.writeFileSync(initialTestimonialsFile, tsContent, 'utf-8');
   } catch (err) {
     console.error('Error syncing initialTestimonials.ts:', err);
+  }
+}
+
+let lastCatalogFirestoreSyncTs = 0;
+
+async function syncCatalogWithFirestore(): Promise<void> {
+  const now = Date.now();
+  if (now - lastCatalogFirestoreSyncTs < 3000) return; // Debounce 3s
+  lastCatalogFirestoreSyncTs = now;
+  try {
+    const snaps = await getDocs(collection(serverDb, 'outfits'));
+    if (snaps.empty) return;
+    const remoteOutfits: LehengaOutfit[] = [];
+    snaps.forEach((d) => {
+      const data = d.data() as Partial<LehengaOutfit> & { id?: string };
+      if (data && data.id && data.title) {
+        remoteOutfits.push({
+          id: String(data.id),
+          code: String(data.color || data.code || ''),
+          color: String(data.color || data.code || ''),
+          title: String(data.title || ''),
+          pricePerDay: Number(data.pricePerDay) || 0,
+          description: String(data.description || ''),
+          ogHumorTagline: String(data.ogHumorTagline || ''),
+          mediaUrl: String(data.mediaUrl || ''),
+          mediaType: data.mediaType === 'video' ? 'video' : 'image',
+          images: Array.isArray(data.images) ? data.images.map(String) : [],
+          mediaUrls: Array.isArray(data.mediaUrls) ? data.mediaUrls.map(String) : [],
+          videoUrl: data.videoUrl ? String(data.videoUrl) : undefined,
+          vibeCategory: String(data.vibeCategory || 'Navratri Ni Pehvesh'),
+          sizes: Array.isArray(data.sizes) ? data.sizes.map(String) : ['Free-Size'],
+          available: data.available !== false,
+          createdAt: String(data.createdAt || new Date().toISOString()),
+          updatedAt: Number(data.updatedAt) || 0,
+        });
+      }
+    });
+
+    if (remoteOutfits.length > 0) {
+      const local = loadOutfits();
+      const localMap = new Map(local.map((o) => [o.id, o]));
+      let hasChanges = false;
+
+      for (const remote of remoteOutfits) {
+        const existing = localMap.get(remote.id);
+        if (!existing) {
+          localMap.set(remote.id, remote);
+          hasChanges = true;
+        } else {
+          const remoteTs = Number(remote.updatedAt) || 0;
+          const localTs = Number((existing as { updatedAt?: unknown }).updatedAt) || 0;
+          if (remoteTs > localTs) {
+            localMap.set(remote.id, { ...existing, ...remote });
+            hasChanges = true;
+          }
+        }
+      }
+
+      if (hasChanges) {
+        const mergedList = Array.from(localMap.values());
+        fs.writeFileSync(CATALOG_FILE, JSON.stringify(mergedList, null, 2), 'utf-8');
+      }
+    }
+  } catch (err) {
+    console.warn('Catalog sync with Firestore warning:', err);
   }
 }
 
@@ -537,7 +626,7 @@ async function processAndSaveImageBuffer(rawBuf: Buffer, targetWebpPath: string)
 }
 
 async function ensureBrowserCompatibleVideo(filePath: string): Promise<void> {
-  if (!filePath.endsWith('.mp4') && !filePath.endsWith('.mov')) return;
+  if (!filePath.endsWith('.mp4') && !filePath.endsWith('.mov') && !filePath.endsWith('.webm')) return;
   try {
     const stat = fs.statSync(filePath);
     const { stdout } = await execFileAsync('ffprobe', [
@@ -646,6 +735,7 @@ function injectDynamicOgTags(html: string, outfit: LehengaOutfit, baseUrl: strin
 async function startServer() {
   const app = express();
   const PORT = 3000;
+  void syncCatalogWithFirestore();
 
   app.use(express.json({ limit: '100mb' }));
   app.use((req, res, next) => {
@@ -1010,7 +1100,7 @@ async function startServer() {
 
       if (isVideo) {
         fs.renameSync(tempPath, finalPath);
-        void ensureBrowserCompatibleVideo(finalPath);
+        await ensureBrowserCompatibleVideo(finalPath);
         if (fs.existsSync(finalPath)) {
           const finalBuf = fs.readFileSync(finalPath);
           saveToMediaStore(finalName, finalBuf);
@@ -1078,7 +1168,7 @@ async function startServer() {
 
         if (isVideo) {
           fs.writeFileSync(finalPath, rawBuf);
-          void ensureBrowserCompatibleVideo(finalPath);
+          await ensureBrowserCompatibleVideo(finalPath);
           if (fs.existsSync(finalPath)) {
             saveToMediaStore(finalName, fs.readFileSync(finalPath));
           }
@@ -1178,7 +1268,12 @@ async function startServer() {
   });
 
   // API: Get all outfits
-  app.get('/api/outfits', (_req, res) => {
+  app.get('/api/outfits', async (_req, res) => {
+    try {
+      await syncCatalogWithFirestore();
+    } catch {
+      // ignore
+    }
     const outfits = loadOutfits();
     res.json(outfits);
   });

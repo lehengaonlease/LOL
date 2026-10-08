@@ -104,12 +104,12 @@ function tripWriteQuotaCircuitBreaker(err?: unknown) {
   }
 }
 
-async function runFirestoreWriteSafely(writeFn: () => Promise<void>): Promise<void> {
+async function runFirestoreWriteSafely(writeFn: () => Promise<void>, timeoutMs = 10000): Promise<void> {
   try {
     await Promise.race([
       writeFn(),
       new Promise<void>((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 4000)
+        setTimeout(() => reject(new Error('timeout')), timeoutMs)
       ),
     ]);
   } catch (err) {
@@ -578,6 +578,97 @@ export async function extractVideoMetadata(videoBlob: Blob, fileName: string): P
   });
 }
 
+async function readBlobSliceAsBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const res = reader.result as string;
+      resolve(res ? (res.includes(',') ? res.split(',')[1] : res) : '');
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+export async function saveMediaBlobToFirestoreSafely(
+  blob: Blob,
+  safeFileName: string,
+  contentType: string,
+  metadata?: Partial<MediaMetadata>,
+  onProgress?: (loadedBytes: number, totalBytes: number) => void
+): Promise<void> {
+  const safeId = safeFileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const CHUNK_SIZE = 500 * 1024; // 500KB binary slice (~667KB base64, comfortably below 900KB security rules)
+  const totalChunks = Math.max(1, Math.ceil(blob.size / CHUNK_SIZE));
+
+  if (totalChunks === 1) {
+    const b64 = await readBlobSliceAsBase64(blob);
+    if (b64) {
+      await runFirestoreWriteSafely(async () => {
+        await setDoc(doc(db, 'media_assets', safeId), {
+          mimeType: contentType,
+          data: b64,
+          totalChunks: 1,
+          metadata: metadata || {},
+          createdAt: Date.now(),
+          writeToken: WRITE_TOKEN,
+        });
+      }, 15000);
+      onProgress?.(blob.size, blob.size);
+    }
+    return;
+  }
+
+  // Multi-chunk: write parent doc first
+  await runFirestoreWriteSafely(async () => {
+    await setDoc(doc(db, 'media_assets', safeId), {
+      mimeType: contentType,
+      totalChunks,
+      metadata: metadata || {},
+      createdAt: Date.now(),
+      writeToken: WRITE_TOKEN,
+    });
+  }, 15000);
+
+  // Write chunks in paced batches of 2
+  for (let idx = 0; idx < totalChunks; idx += 2) {
+    const start1 = idx * CHUNK_SIZE;
+    const end1 = Math.min(blob.size, (idx + 1) * CHUNK_SIZE);
+    const slice1 = blob.slice(start1, end1);
+    const b64_1 = await readBlobSliceAsBase64(slice1);
+
+    const p1 = runFirestoreWriteSafely(async () => {
+      await setDoc(doc(db, 'media_assets', safeId, 'chunks', String(idx).padStart(5, '0')), {
+        index: idx,
+        data: b64_1,
+        writeToken: WRITE_TOKEN,
+      });
+    }, 20000);
+
+    let p2: Promise<void> = Promise.resolve();
+    let currentLoaded = end1;
+    if (idx + 1 < totalChunks) {
+      const start2 = (idx + 1) * CHUNK_SIZE;
+      const end2 = Math.min(blob.size, (idx + 2) * CHUNK_SIZE);
+      const slice2 = blob.slice(start2, end2);
+      const b64_2 = await readBlobSliceAsBase64(slice2);
+      p2 = runFirestoreWriteSafely(async () => {
+        await setDoc(doc(db, 'media_assets', safeId, 'chunks', String(idx + 1).padStart(5, '0')), {
+          index: idx + 1,
+          data: b64_2,
+          writeToken: WRITE_TOKEN,
+        });
+      }, 20000);
+      currentLoaded = end2;
+    }
+
+    await Promise.all([p1, p2]);
+    onProgress?.(currentLoaded, blob.size);
+    if (idx + 2 < totalChunks) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+}
+
 /**
  * Uploads a raw JavaScript File/Blob directly to Firebase Storage bucket or server
  * ensuring EXIF orientation/rotation metadata is inspected and normalized first.
@@ -648,34 +739,7 @@ export async function uploadMediaToCloud(
     );
     if (binaryServerUrl) {
       // Also persist to cloud Firestore media_assets asynchronously so Vercel & shared links have it
-      try {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const res = reader.result as string;
-          const base64 = res ? (res.includes(',') ? res.split(',')[1] : res) : '';
-          if (base64 && base64.length <= 1_200_000) {
-            void runFirestoreWriteSafely(async () => {
-              await setDoc(doc(db, 'media_assets', safeFileName), {
-                mimeType: contentType,
-                data: base64,
-                totalChunks: 1,
-                metadata: {
-                  orientation: mediaMeta.orientation,
-                  rotation: mediaMeta.rotation,
-                  width: mediaMeta.width,
-                  height: mediaMeta.height,
-                  isPortrait: mediaMeta.isPortrait,
-                },
-                createdAt: Date.now(),
-                writeToken: WRITE_TOKEN,
-              });
-            });
-          }
-        };
-        reader.readAsDataURL(uploadBlob);
-      } catch {
-        // ignore
-      }
+      void saveMediaBlobToFirestoreSafely(uploadBlob, safeFileName, contentType, mediaMeta).catch(() => {});
       return binaryServerUrl;
     }
 
@@ -731,69 +795,15 @@ export async function uploadMediaToCloud(
     }
 
     // 5. Fallback 2: Standalone cloud upload (for Vercel / serverless deployments without local Express storage)
-    const base64Data = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const res = reader.result as string;
-        resolve(res ? (res.includes(',') ? res.split(',')[1] : res) : '');
-      };
-      reader.onerror = () => reject(new Error('Failed to read file'));
-      reader.readAsDataURL(uploadBlob);
-    });
-
-    if (base64Data) {
-      const cloudMediaUrl = `/uploads/${safeFileName}`;
-      // Fast single-document write for standard photos (<850KB binary -> ~1.1MB base64)
-      if (base64Data.length <= 1_150_000) {
-        await runFirestoreWriteSafely(async () => {
-          await setDoc(doc(db, 'media_assets', safeFileName), {
-            mimeType: contentType,
-            data: base64Data,
-            totalChunks: 1,
-            metadata: {
-              orientation: mediaMeta.orientation,
-              rotation: mediaMeta.rotation,
-              width: mediaMeta.width,
-              height: mediaMeta.height,
-              isPortrait: mediaMeta.isPortrait,
-            },
-            createdAt: Date.now(),
-            writeToken: WRITE_TOKEN,
-          });
-        });
-      } else {
-        const CHUNK_SIZE = 600 * 1024;
-        const totalChunks = Math.ceil(base64Data.length / CHUNK_SIZE);
-        await runFirestoreWriteSafely(async () => {
-          const batch = writeBatch(db);
-          for (let i = 0; i < totalChunks; i++) {
-            const chunkSlice = base64Data.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-            batch.set(doc(db, 'media_assets', safeFileName, 'chunks', String(i).padStart(5, '0')), {
-              index: i,
-              data: chunkSlice,
-              writeToken: WRITE_TOKEN,
-            });
-          }
-          batch.set(doc(db, 'media_assets', safeFileName), {
-            mimeType: contentType,
-            totalChunks,
-            metadata: {
-              orientation: mediaMeta.orientation,
-              rotation: mediaMeta.rotation,
-              width: mediaMeta.width,
-              height: mediaMeta.height,
-              isPortrait: mediaMeta.isPortrait,
-            },
-            createdAt: Date.now(),
-            writeToken: WRITE_TOKEN,
-          });
-          await batch.commit();
-        });
-      }
-      return cloudMediaUrl;
-    }
-
-    throw new Error('Failed to upload media file');
+    const cloudMediaUrl = `/uploads/${safeFileName}`;
+    await saveMediaBlobToFirestoreSafely(
+      uploadBlob,
+      safeFileName,
+      contentType,
+      mediaMeta,
+      onProgress
+    );
+    return cloudMediaUrl;
   } finally {
     activeMutationsCount = Math.max(0, activeMutationsCount - 1);
   }
@@ -1277,10 +1287,6 @@ export function subscribeToLiveStore({
   let outfitsCollectionLoaded = false;
 
   const emitOrderedOutfits = () => {
-    if (hasLiveBackendServer) {
-      // When connected to the live Express server (ais-dev / ais-pre), /api/outfits is authoritative
-      return;
-    }
     if (!outfitsCollectionLoaded) return;
     if (activeMutationsCount > 0) return;
 
